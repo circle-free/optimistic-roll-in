@@ -1,0 +1,28 @@
+{
+  "name": "optimistic-roll-in",
+  "version": "0.0.1",
+  "description": "An Optimistic Roll-In Proof of Concept.",
+  "main": "/js/src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prettier": "prettier --write 'bin/**/*.js' 'js/**/*.js'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/circle-free/optimistic-roll-in.git"
+  },
+  "keywords": [
+    "optimistic-roll-in",
+    "ethereum"
+  ],
+  "author": "Circle-Free",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/circle-free/optimistic-roll-in/issues"
+  },
+  "homepage": "https://github.com/circle-free/optimistic-roll-in#readme",
+  "devDependencies": {
+    "prettier": "^2.1.0"
+  },
+  "dependencies": {}
+}

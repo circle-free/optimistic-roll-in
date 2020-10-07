@@ -1,0 +1,23 @@
+{
+  "name": "optimistic-roll-in-js",
+  "version": "0.0.1",
+  "description": "Optimistic Roll-In JS Client.",
+  "main": "src/index.js",
+  "repository": "https://github.com/circle-free/optimistic-roll-in",
+  "author": "Circle-Free",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/circle-free/optimistic-roll-in/issues"
+  },
+  "private": false,
+  "scripts": {
+    "test": "mocha 'tests'",
+    "prettier": "prettier --write 'src/**/*.js' 'tests/**/*.js'"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "chai": "^4.2.0",
+    "mocha": "^8.0.1",
+    "prettier": "^2.0.5"
+  }
+}
