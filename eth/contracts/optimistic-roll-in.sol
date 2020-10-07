@@ -51,11 +51,11 @@ contract Optimistic_Roll_In {
 
     require(account_states[user] == bytes32(0), "ALREADY_INITIALIZED");
 
-    // states_root to be merkle root of a 1-element (bytes32(0)) tree
+    // states_root to be merkle root of a 1-element (bytes32(0)) tree, proof[0] is tree starting size
     bytes32[] memory proof = new bytes32[](1);
     proof[0] = bytes32(0);
 
-    // args_root to the merkle root of a 0-element tree (so root is bytes(32))
+    // args_root to be merkle root of a 0-element tree (so root is bytes32(0))
     // account state is hash(states root, args root)
     account_states[user] = Merkle_Library.hash_node(Merkle_Library.try_append_one(bytes32(0), bytes32(0), proof), bytes32(0));
 
