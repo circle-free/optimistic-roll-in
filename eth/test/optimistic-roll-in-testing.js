@@ -107,7 +107,7 @@ contract.only("Optimistic Roll In", accounts => {
       const { receipt, logs } = await contractInstance.bond(suspect, { value: bondAmount, from: suspect });
       const balance = await contractInstance.balance(suspect);
 
-      expect(receipt.gasUsed).to.equal(44007);
+      expect(receipt.gasUsed).to.equal(44029);
 
       expect(logs[0].event).to.equal('Bonded');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -121,16 +121,15 @@ contract.only("Optimistic Roll In", accounts => {
       const { receipt, logs } = await contractInstance.initialize({ from: suspect });
       statesTree = new MerkleTree([to32ByteBuffer(0)], treeOptions);
       argsTree = new MerkleTree([], treeOptions);
-      const statesRoot = await contractInstance.states_root(suspect);
-      const argsRoot = await contractInstance.args_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(45101);
+      expect(receipt.gasUsed).to.equal(45767);
 
       expect(logs[0].event).to.equal('Initialized');
       expect(logs[0].args[0]).to.equal(suspect);
 
-      expect(statesRoot).to.equal('0x' + statesTree.root.toString('hex'));
-      expect(argsRoot).to.equal('0x' + argsTree.root.toString('hex'));
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (suspect) to perform a normal state transition.", async () => {
@@ -139,6 +138,8 @@ contract.only("Optimistic Roll In", accounts => {
       const transitionIndex = statesTree.elements.length - 1;
       const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
+      const statesRootHex = '0x' + statesTree.root.toString('hex');
+      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new state from the current state (which is the last state) and the arg
@@ -154,23 +155,31 @@ contract.only("Optimistic Roll In", accounts => {
       const { compactProof: argAppendProof } = argProof;
       const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
 
-      const { receipt, logs } = await contractInstance.perform(transitionIndex, currentStateHex, argHex, argAppendProofHex, stateSingleProofHex, { from: suspect });
+      const { receipt, logs } = await contractInstance.perform(
+        transitionIndex,
+        currentStateHex,
+        argHex,
+        argsRootHex,
+        argAppendProofHex,
+        statesRootHex,
+        stateSingleProofHex,
+        { from: suspect }
+      );
       
       // Since the transaction executed successfully, update the locally maintained merkle trees
       statesTree = newStatesTree;
       argsTree = newArgsTree;
 
-      const newStatesRoot = await contractInstance.states_root(suspect);
-      const newArgsRoot = await contractInstance.args_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(289871);
+      expect(receipt.gasUsed).to.equal(269856);
 
       expect(logs[0].event).to.equal('New_State');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1]).to.equal('0x' + newState.toString('hex'));
 
-      expect(newStatesRoot).to.equal('0x' + statesTree.root.toString('hex'));
-      expect(newArgsRoot).to.equal('0x' + argsTree.root.toString('hex'));
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (suspect) to perform a valid optimistic state transition.", async () => {
@@ -179,6 +188,8 @@ contract.only("Optimistic Roll In", accounts => {
       const transitionIndex = statesTree.elements.length - 1;
       const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
+      const statesRootHex = '0x' + statesTree.root.toString('hex');
+      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new state from the current state (which is the last state) and the arg
@@ -195,22 +206,31 @@ contract.only("Optimistic Roll In", accounts => {
       const { compactProof: argAppendProof } = argProof;
       const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
 
-      const { receipt, logs } = await contractInstance.perform_optimistically(transitionIndex, currentStateHex, argHex, newStateHex, argAppendProofHex, stateSingleProofHex, { from: suspect });
+      const { receipt, logs } = await contractInstance.perform_optimistically(
+        transitionIndex,
+        currentStateHex,
+        argHex,
+        newStateHex,
+        argsRootHex,
+        argAppendProofHex,
+        statesRootHex,
+        stateSingleProofHex,
+        { from: suspect }
+      );
       
       // Since the transaction executed successfully, update the locally maintained merkle trees
       statesTree = newStatesTree;
       argsTree = newArgsTree;
 
-      const newStatesRoot = await contractInstance.states_root(suspect);
-      const newArgsRoot = await contractInstance.args_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(42733);
+      expect(receipt.gasUsed).to.equal(38043);
 
       expect(logs[0].event).to.equal('New_Optimistic_State');
       expect(logs[0].args[0]).to.equal(suspect);
 
-      expect(newStatesRoot).to.equal('0x' + statesTree.root.toString('hex'));
-      expect(newArgsRoot).to.equal('0x' + argsTree.root.toString('hex'));
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (suspect) to perform valid optimistic state transitions in batch.", async () => {
@@ -220,6 +240,8 @@ contract.only("Optimistic Roll In", accounts => {
       const transitionIndex = statesTree.elements.length - 1;
       const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
+      const statesRootHex = '0x' + statesTree.root.toString('hex');
+      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new states from the current state (which is the last state) and the args
@@ -245,22 +267,31 @@ contract.only("Optimistic Roll In", accounts => {
       const { compactProof: argAppendProof } = argProof;
       const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
 
-      const { receipt, logs } = await contractInstance.perform_many_optimistically(transitionIndex, currentStateHex, argsHex, newStatesHex, argAppendProofHex, stateMultiProofHex, { from: suspect });
+      const { receipt, logs } = await contractInstance.perform_many_optimistically(
+        transitionIndex,
+        currentStateHex,
+        argsHex,
+        newStatesHex,
+        argsRootHex,
+        argAppendProofHex,
+        statesRootHex,
+        stateMultiProofHex,
+        { from: suspect }
+      );
       
       // Since the transaction executed successfully, update the locally maintained merkle trees
       statesTree = newStatesTree;
       argsTree = newArgsTree;
 
-      const newStatesRoot = await contractInstance.states_root(suspect);
-      const newArgsRoot = await contractInstance.args_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(289808);
+      expect(receipt.gasUsed).to.equal(285178);
 
       expect(logs[0].event).to.equal('New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
 
-      expect(newStatesRoot).to.equal('0x' + statesTree.root.toString('hex'));
-      expect(newArgsRoot).to.equal('0x' + argsTree.root.toString('hex'));
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (suspect) to perform fraudulent optimistic state transitions in batch.", async () => {
@@ -270,6 +301,8 @@ contract.only("Optimistic Roll In", accounts => {
       const transitionIndex = statesTree.elements.length - 1;
       const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
+      const statesRootHex = '0x' + statesTree.root.toString('hex');
+      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // The 21st state transition (0-indexed) here will be fraudulent (incorrect)
@@ -301,7 +334,17 @@ contract.only("Optimistic Roll In", accounts => {
       const { compactProof: argAppendProof } = argProof;
       const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
 
-      const { receipt, logs } = await contractInstance.perform_many_optimistically(transitionIndex, currentStateHex, argsHex, newStatesHex, argAppendProofHex, stateSingleProofHex, { from: suspect });
+      const { receipt, logs } = await contractInstance.perform_many_optimistically(
+        transitionIndex,
+        currentStateHex,
+        argsHex,
+        newStatesHex,
+        argsRootHex,
+        argAppendProofHex,
+        statesRootHex,
+        stateSingleProofHex,
+        { from: suspect }
+      );
       
       // Since the transaction executed successfully, update the locally maintained merkle trees
       statesTree = newStatesTree;
@@ -310,16 +353,15 @@ contract.only("Optimistic Roll In", accounts => {
       // Save this txId (for the accuser), simulating that the accuser will see this txId and need to validate it later
       fraudulentTxId = receipt.transactionHash;
 
-      const newStatesRoot = await contractInstance.states_root(suspect);
-      const newArgsRoot = await contractInstance.args_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(298186);
+      expect(receipt.gasUsed).to.equal(293532);
 
       expect(logs[0].event).to.equal('New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
 
-      expect(newStatesRoot).to.equal('0x' + statesTree.root.toString('hex'));
-      expect(newArgsRoot).to.equal('0x' + argsTree.root.toString('hex'));
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (accuser) to detect a transaction containing a fraudulent state transition.", async () => {
@@ -372,18 +414,16 @@ contract.only("Optimistic Roll In", accounts => {
       // Build a partial merkle tree (for the states) from the proof data pulled from this transaction
       const stateProof = { index: transitionIndex, element: currentState, compactProof: stateSingleProof };
       statesPartialTree = PartialMerkleTree.fromSingleProof(stateProof, treeOptions).append(newStates);
-      const statesRoot = await contractInstance.states_root(suspect);
-      
-      // We expect this partial tree to have the same root as the suspects current states tree on-chain
-      expect(statesPartialTree.root.toString('hex')).to.equal(statesRoot.slice(2));
 
       // Build a partial merkle tree (for the args) from the proof data pulled from this transaction
       const argProof = { appendElements: args, compactProof: argAppendProof };
       argsPartialTree = PartialMerkleTree.fromAppendProof(argProof, treeOptions);
-      const argsRoot = await contractInstance.args_root(suspect);
 
-      // We expect this partial tree to have the same root as the suspects current args tree on-chain
-      expect(argsPartialTree.root.toString('hex')).to.equal(argsRoot.slice(2));
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesPartialTree.root, argsPartialTree.root);
+
+      // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (suspect) to perform a valid optimistic state transition on top of an invalid state.", async () => {
@@ -392,6 +432,8 @@ contract.only("Optimistic Roll In", accounts => {
       const transitionIndex = statesTree.elements.length - 1;
       const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
+      const statesRootHex = '0x' + statesTree.root.toString('hex');
+      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new state from the current state (which is the last state) and the arg
@@ -408,7 +450,17 @@ contract.only("Optimistic Roll In", accounts => {
       const { compactProof: argAppendProof } = argProof;
       const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
 
-      const { receipt, logs } = await contractInstance.perform_optimistically(transitionIndex, currentStateHex, argHex, newStateHex, argAppendProofHex, stateSingleProofHex, { from: suspect });
+      const { receipt, logs } = await contractInstance.perform_optimistically(
+        transitionIndex,
+        currentStateHex,
+        argHex,
+        newStateHex,
+        argsRootHex,
+        argAppendProofHex,
+        statesRootHex,
+        stateSingleProofHex,
+        { from: suspect }
+      );
       
       // Since the transaction executed successfully, update the locally maintained merkle trees
       statesTree = newStatesTree;
@@ -417,16 +469,15 @@ contract.only("Optimistic Roll In", accounts => {
       // Save this txId (for the accuser), simulating that the accuser will see this txId and need to append its contents to their partial tree later
       txIdAfterFraudulentTxId = receipt.transactionHash;
 
-      const newStatesRoot = await contractInstance.states_root(suspect);
-      const newArgsRoot = await contractInstance.args_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(50216);
+      expect(receipt.gasUsed).to.equal(45526);
 
       expect(logs[0].event).to.equal('New_Optimistic_State');
       expect(logs[0].args[0]).to.equal(suspect);
 
-      expect(newStatesRoot).to.equal('0x' + statesTree.root.toString('hex'));
-      expect(newArgsRoot).to.equal('0x' + argsTree.root.toString('hex'));
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (accuser) to lock a suspect's account for a time frame.", async () => {
@@ -441,7 +492,7 @@ contract.only("Optimistic Roll In", accounts => {
       const accuserLocker = await contractInstance.locker(accuser);
       const accuserLockedBlock = await contractInstance.locked_block(accuser);
 
-      expect(receipt.gasUsed).to.equal(129229);
+      expect(receipt.gasUsed).to.equal(129207);
 
       expect(logs[0].event).to.equal('Bonded');
       expect(logs[0].args[0]).to.equal(accuser);
@@ -480,21 +531,21 @@ contract.only("Optimistic Roll In", accounts => {
 
       // Append the new state to the locally maintained states partial tree
       statesPartialTree = statesPartialTree.append(newState);
-      const statesRoot = await contractInstance.states_root(suspect);
-      
-      // We expect this partial tree to have the same root as the suspects current states tree on-chain
-      expect(statesPartialTree.root.toString('hex')).to.equal(statesRoot.slice(2));
 
       // Append the new state to the locally maintained args partial tree
       argsPartialTree = argsPartialTree.append(arg);
-      const argsRoot = await contractInstance.args_root(suspect);
 
-      // We expect this partial tree to have the same root as the suspects current args tree on-chain
-      expect(argsPartialTree.root.toString('hex')).to.equal(argsRoot.slice(2));
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesPartialTree.root, argsPartialTree.root);
+
+      // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (accuser) to prove a suspect's fraud (from a partial tree).", async () => {
       const transitionIndex = fraudulentTransitionIndex;
+      const statesRootHex = '0x' + statesPartialTree.root.toString('hex');
+      const argsRootHex = '0x' + argsPartialTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Build a Single Proof for the arg that was used in this invalid state transition
@@ -508,7 +559,17 @@ contract.only("Optimistic Roll In", accounts => {
       const statesMultiProofHex = statesMultiProof.map(p => '0x' + p.toString('hex'));
       
       // Prove the fraud
-      const { receipt, logs } = await contractInstance.prove_fraud(suspect, transitionIndex, argHex, statesHex, argSingleProofHex, statesMultiProofHex, { from: accuser });
+      const { receipt, logs } = await contractInstance.prove_fraud(
+        suspect,
+        transitionIndex,
+        argHex,
+        statesHex,
+        argsRootHex,
+        argSingleProofHex,
+        statesRootHex,
+        statesMultiProofHex,
+        { from: accuser }
+      );
 
       const suspectBalance = await contractInstance.balance(suspect);
       const suspectLocker = await contractInstance.locker(suspect);
@@ -522,7 +583,7 @@ contract.only("Optimistic Roll In", accounts => {
       const expectedAccuserBalance = web3.utils.toBN(bondAmount).add(web3.utils.toBN(accuserBondAmount)).toString();
       rollbackSize = (transitionIndex + 1).toString();
 
-      expect(receipt.gasUsed).to.equal(282686);
+      expect(receipt.gasUsed).to.equal(283049);
 
       expect(logs[0].event).to.equal('Fraud_Proven');
       expect(logs[0].args[0]).to.equal(accuser);
@@ -559,6 +620,8 @@ contract.only("Optimistic Roll In", accounts => {
     });
   
     it("allows a user (suspect) to rollback their args tree and states tree.", async () => {
+      const statesRootHex = '0x' + statesTree.root.toString('hex');
+      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
       
       // Suspect needs to create an args Merkle Tree of all pre-invalid-transition args
@@ -592,7 +655,17 @@ contract.only("Optimistic Roll In", accounts => {
       const statesAppendProofHex = statesAppendProof.map(p => '0x' + p.toString('hex'));
 
       // Suspect performs the rollback while bonding new coin at the same time
-      const { receipt, logs } = await contractInstance.rollback(oldArgsRootHex, oldStatesRootHex, rolledBackArgsHex, rolledBackStatesHex, argAppendProofHex, statesAppendProofHex, { value: bondAmount, from: suspect });
+      const { receipt, logs } = await contractInstance.rollback(
+        oldArgsRootHex,
+        oldStatesRootHex,
+        rolledBackArgsHex,
+        rolledBackStatesHex,
+        argsRootHex,
+        argAppendProofHex,
+        statesRootHex,
+        statesAppendProofHex,
+        { value: bondAmount, from: suspect }
+      );
       
       // Since the rollback transaction was successful, update the locally maintained states and args trees
       statesTree = oldStatesTree;
@@ -601,10 +674,10 @@ contract.only("Optimistic Roll In", accounts => {
       const suspectBalance = await contractInstance.balance(suspect);
       const suspectLocker = await contractInstance.locker(suspect);
       const suspectRollbackSize = await contractInstance.rollback_size(suspect);
-      const argsRoot = await contractInstance.args_root(suspect);
-      const statesRoot = await contractInstance.states_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(255721);
+      expect(receipt.gasUsed).to.equal(251053);
 
       expect(logs[0].event).to.equal('Bonded');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -618,8 +691,7 @@ contract.only("Optimistic Roll In", accounts => {
       expect(suspectLocker).to.equal(zeroAddress);
       expect(suspectRollbackSize.toString()).to.equal('0');
 
-      expect(argsRoot).to.equal(oldArgsRootHex);
-      expect(statesRoot).to.equal(oldStatesRootHex);
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (suspect) to re-perform valid optimistic state transitions in batch.", async () => {
@@ -629,6 +701,8 @@ contract.only("Optimistic Roll In", accounts => {
       const transitionIndex = statesTree.elements.length - 1;
       const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
+      const statesRootHex = '0x' + statesTree.root.toString('hex');
+      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new states from the current state (which is the last state) and the args
@@ -654,22 +728,31 @@ contract.only("Optimistic Roll In", accounts => {
       const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
 
       // Build an Append Proof that enables appending new args to the args tree
-      const { receipt, logs } = await contractInstance.perform_many_optimistically(transitionIndex, currentStateHex, argsHex, newStatesHex, argAppendProofHex, stateMultiProofHex, { from: suspect });
+      const { receipt, logs } = await contractInstance.perform_many_optimistically(
+        transitionIndex,
+        currentStateHex,
+        argsHex,
+        newStatesHex,
+        argsRootHex,
+        argAppendProofHex,
+        statesRootHex,
+        stateMultiProofHex,
+        { from: suspect }
+      );
       
       // Since the transaction executed successfully, update the locally maintained merkle trees
       statesTree = newStatesTree;
       argsTree = newArgsTree;
 
-      const newStatesRoot = await contractInstance.states_root(suspect);
-      const newArgsRoot = await contractInstance.args_root(suspect);
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashNode(statesTree.root, argsTree.root);
 
-      expect(receipt.gasUsed).to.equal(300474);
+      expect(receipt.gasUsed).to.equal(295844);
 
       expect(logs[0].event).to.equal('New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
 
-      expect(newStatesRoot).to.equal('0x' + statesTree.root.toString('hex'));
-      expect(newArgsRoot).to.equal('0x' + argsTree.root.toString('hex'));
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
   });
 });
