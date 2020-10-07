@@ -522,7 +522,7 @@ contract.only("Optimistic Roll In", accounts => {
       const expectedAccuserBalance = web3.utils.toBN(bondAmount).add(web3.utils.toBN(accuserBondAmount)).toString();
       rollbackSize = (transitionIndex + 1).toString();
 
-      expect(receipt.gasUsed).to.equal(282662);
+      expect(receipt.gasUsed).to.equal(282686);
 
       expect(logs[0].event).to.equal('Fraud_Proven');
       expect(logs[0].args[0]).to.equal(accuser);

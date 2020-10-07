@@ -175,8 +175,8 @@ contract Optimistic_Roll_In {
     require(locker[suspect] == accuser, "NOT_LOCKER");
 
     // Check that states and args involved in that transition index exist in their respective roots
-    Merkle_Library.elements_exist(states_root[suspect], states, states_proof);
-    Merkle_Library.element_exists(args_root[suspect], transition_index, arg, arg_proof);
+    require(Merkle_Library.elements_exist(states_root[suspect], states, states_proof), "INVALID_STATES");
+    require(Merkle_Library.element_exists(args_root[suspect], transition_index, arg, arg_proof), "INVALID_ARG");
 
     // Check that states provided are consecutive and regarding that transition index
     uint256[] memory state_indices = Merkle_Library.get_indices(states, states_proof);
@@ -257,7 +257,7 @@ contract Optimistic_Roll_In {
     require(rollback_size[user] == 0, "ROLLBACK_REQUIRED");
 
     // Check that the the provided state is in the merkle tree
-    Merkle_Library.element_exists(states_root[user], transition_index, current_state, current_state_proof);
+    require(Merkle_Library.element_exists(states_root[user], transition_index, current_state, current_state_proof), "INVALID_STATE");
 
     // Check that the index of the provided state (the transition index) is the last state
     require(transition_index == uint256(current_state_proof[0]) - 1);
