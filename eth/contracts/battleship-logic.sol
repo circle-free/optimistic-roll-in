@@ -20,7 +20,7 @@ pragma experimental ABIEncoderV2;
 // bit-100 from right is ready
 
 
-contract Battleship {
+contract Battleship_Logic {
   function recover(bytes32 hash, bytes memory signature) internal pure returns (address signer) {
       require(signature.length == 65, "INVALID_SIG_LENGTH");
 
