@@ -1,7 +1,7 @@
 {
   "name": "optimistic-roll-in-js",
   "version": "0.0.1",
-  "description": "Optimistic Roll-In JS Client.",
+  "description": "Layer-Agnostic Optimistic Roll-Ins JS Library.",
   "main": "src/index.js",
   "repository": "https://github.com/circle-free/optimistic-roll-in",
   "author": "Circle-Free",

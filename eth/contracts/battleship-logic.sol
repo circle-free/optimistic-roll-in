@@ -1,4 +1,4 @@
-pragma solidity >=0.6.0 <0.7.1;
+pragma solidity >=0.6.0 <=0.7.3;
 pragma experimental ABIEncoderV2;
 
 // SPDX-License-Identifier: MIT
@@ -19,37 +19,42 @@ pragma experimental ABIEncoderV2;
 
 // bit-100 from right is ready
 
-
 contract Battleship_Logic {
   function recover(bytes32 hash, bytes memory signature) internal pure returns (address signer) {
-      require(signature.length == 65, "INVALID_SIG_LENGTH");
+    require(signature.length == 65, "INVALID_SIG_LENGTH");
 
-      // Divide the signature in r, s and v variables
-      bytes32 r;
-      bytes32 s;
-      uint8 v;
+    // Divide the signature in r, s and v variables
+    bytes32 r;
+    bytes32 s;
+    uint8 v;
 
-      // ecrecover takes the signature parameters, and the only way to get them currently is to use assembly.
-      // solhint-disable-next-line no-inline-assembly
-      assembly {
-        r := mload(add(signature, 0x20))
-        s := mload(add(signature, 0x40))
-        v := byte(0, mload(add(signature, 0x60)))
-      }
+    // ecrecover takes the signature parameters, and the only way to get them currently is to use assembly.
+    // solhint-disable-next-line no-inline-assembly
+    assembly {
+      r := mload(add(signature, 0x20))
+      s := mload(add(signature, 0x40))
+      v := byte(0, mload(add(signature, 0x60)))
+    }
 
-      require(s <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0, "INVALID_SIG_S");
+    require(s <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0, "INVALID_SIG_S");
 
-      require(v == 27 || v == 28, "INVALID_SIG_V");
+    require(v == 27 || v == 28, "INVALID_SIG_V");
 
-      signer = ecrecover(hash, v, r, s);
-      require(signer != address(0), "ECDSA: invalid signature");
+    signer = ecrecover(hash, v, r, s);
+    require(signer != address(0), "ECDSA: invalid signature");
   }
 
   function toEthSignedMessageHash(bytes32 hash) internal pure returns (bytes32) {
     return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
   }
 
-  function place_piece(bytes32 board_state, uint8 x, uint8 y, uint8 orientation, uint8 size) public pure returns (bytes32) {
+  function place_piece(
+    bytes32 board_state,
+    uint8 x,
+    uint8 y,
+    uint8 orientation,
+    uint8 size
+  ) public pure returns (bytes32) {
     require(size > 1 && size < 6, "INVALID_PIECE");
     require(size > 1 && size < 6, "INVALID_PIECE");
     require(orientation < 4, "INVALID_ORIENTATION");
@@ -78,15 +83,15 @@ contract Battleship_Logic {
 
       // set the bit
       board_state |= mask;
-      
+
       if (orientation == 0) {
-        mask <<= 10;                    // 10 spots higher (north)
+        mask <<= 10; // 10 spots higher (north)
       } else if (orientation == 1) {
-        mask <<= 1;                     // 1 spot higher (east)
+        mask <<= 1; // 1 spot higher (east)
       } else if (orientation == 2) {
-        mask >>= 10;                    // 10 spots lower (south)
+        mask >>= 10; // 10 spots lower (south)
       } else {
-        mask >>= 1;                     // 1 spot lower (west)
+        mask >>= 1; // 1 spot lower (west)
       }
     }
 
@@ -118,17 +123,23 @@ contract Battleship_Logic {
     return board_state;
   }
 
-  function battle(address[2] memory addresses, bytes32[2] memory board_states, uint8[2][] memory x, uint8[2][] memory y, bytes[2] memory signatures) public pure returns (bytes32[2] memory) {
+  function battle(
+    address[2] memory addresses,
+    bytes32[2] memory board_states,
+    uint8[2][] memory x,
+    uint8[2][] memory y,
+    bytes[2] memory signatures
+  ) public pure returns (bytes32[2] memory) {
     // Compute the game hash and check signatures
     // Note: This should be done in the Optimistic layer
     bytes32 game_hash = keccak256(abi.encodePacked(board_states, x, y));
     game_hash = toEthSignedMessageHash(game_hash);
     require(addresses[0] == recover(game_hash, signatures[0]));
     require(addresses[1] == recover(game_hash, signatures[1]));
-    
+
     uint256 value1 = x[0].length;
     uint256 value2 = y[0].length;
-    
+
     // Check that player 1 x and y lengths match
     require(value1 == value2, "INSTRUCTION_MISMATCH");
 
@@ -146,41 +157,41 @@ contract Battleship_Logic {
     bytes32 player_1_board_state = board_states[0];
     bytes32 player_2_board_state = board_states[1];
 
-    value1 = 0;   // instruction index
-    value2 = 0;   // turn
+    value1 = 0; // instruction index
+    value2 = 0; // turn
     bytes32 mask;
 
-    uint256 value3;   // player 1 damage count
-    uint256 value4;   // player 2 damage count
+    uint256 value3; // player 1 damage count
+    uint256 value4; // player 2 damage count
 
     while (true) {
       if (value2 == 0) {
         // Compute hit mask
         mask = bytes32(uint256(1)) << ((10 * y[0][value1]) + x[0][value1]);
 
-        if (player_2_board_state & mask != mask) continue;        // missed
+        if (player_2_board_state & mask != mask) continue; // missed
 
-        player_2_board_state &= ~mask;                            // unset the bit (was hit)
-        value4 += 1;                                              // increase damage
+        player_2_board_state &= ~mask; // unset the bit (was hit)
+        value4 += 1; // increase damage
 
-        if (value4 != 19) continue;                               // not enough damage
+        if (value4 != 19) continue; // not enough damage
 
         mask = bytes32(uint256(1)) << 100;
-        player_2_board_state &= ~mask;                            // unset the ready flag (player 2 lost)
+        player_2_board_state &= ~mask; // unset the ready flag (player 2 lost)
 
         break;
       } else {
         mask = bytes32(uint256(1)) << ((10 * y[1][value1]) + x[1][value1]);
 
-        if (player_1_board_state & mask != mask) continue;        // missed
+        if (player_1_board_state & mask != mask) continue; // missed
 
-        player_1_board_state &= ~mask;                            // unset the bit (was hit)
-        value3 += 1;                                              // increase damage
+        player_1_board_state &= ~mask; // unset the bit (was hit)
+        value3 += 1; // increase damage
 
-        if (value3 != 19) continue;                               // not enough damage
+        if (value3 != 19) continue; // not enough damage
 
         mask = bytes32(uint256(1)) << 100;
-        player_1_board_state &= ~mask;                            // unset the ready flag (player 1 lost)
+        player_1_board_state &= ~mask; // unset the ready flag (player 1 lost)
 
         break;
       }
