@@ -1,28 +1,36 @@
-pragma solidity >=0.6.0 <0.7.1;
-
 // SPDX-License-Identifier: MIT
 
-import "../node_modules/merkle-trees/eth/contracts/merkle-library.sol";
+pragma solidity >=0.6.0 <=0.7.3;
+pragma experimental ABIEncoderV2;
 
-// TODO: more efficient merkle tree library (redundant steps being done in some places)
-// TODO: make args calldata somehow (msg.data contains the functions and the encoded params)
-// TODO: allow an arbitrary amount of state transitions to be called
-// TODO: if states are themselves roots, then calldata will contains sub tree proofs (doesn't matter, arbitrary calldata)
+import "../node_modules/merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-library.sol";
+import "./some-logic-contract.sol";
 
 contract Optimistic_Roll_In {
-  event New_State(address user, bytes32 new_state);
-  event New_Optimistic_State(address user, uint256 block_time);
-  event New_Optimistic_States(address user, uint256 block_time);
-  event Locked(address suspect, address accuser);
-  event Unlocked(address suspect, address accuser);
-  event Fraud_Proven(address accuser, address suspect, uint256 transition_index, uint256 amount);
-  event Rolled_Back(address user, uint256 transition_index, uint256 block_time);
+  event New_Optimistic_State(address indexed user, uint256 indexed block_time);
+  event New_Optimistic_States(address indexed user, uint256 indexed block_time);
+  event Locked(address indexed suspect, address indexed accuser);
+  event Unlocked(address indexed suspect, address indexed accuser);
+  event Fraud_Proven(
+    address indexed accuser,
+    address indexed suspect,
+    uint256 indexed transition_index,
+    uint256 amount
+  );
+  event Rolled_Back(address indexed user, uint256 indexed tree_size, uint256 indexed block_time);
+  event Exited_Optimism(address indexed user);
+
+  address public immutable logic_address;
 
   mapping(address => uint256) public balances;
   mapping(address => bytes32) public account_states;
   mapping(address => address) public lockers;
   mapping(address => uint256) public locked_times;
   mapping(address => uint256) public rollback_sizes;
+
+  constructor(address _logic_address) {
+    logic_address = _logic_address;
+  }
 
   receive() external payable {
     bond(msg.sender);
@@ -42,13 +50,13 @@ contract Optimistic_Roll_In {
   }
 
   // Sets user's account state to starting point, and bonds msg.value
-  function initialize() public payable {
+  function initialize() external payable {
     address user = msg.sender;
     bond(user);
 
     require(account_states[user] == bytes32(0), "ALREADY_INITIALIZED");
 
-    // Set account state to combination of empty states root, empty args root, and last time of 0 (not in optimism)
+    // Set account state to combination of empty call data tree, zero current state (S_0), and last time of 0 (not in optimism)
     account_states[user] = keccak256(abi.encodePacked(bytes32(0), bytes32(0), bytes32(0)));
   }
 
@@ -62,209 +70,194 @@ contract Optimistic_Roll_In {
     destination.transfer(amount);
   }
 
-  // TODO: This is a temporary example. Call to some other contract instead.
-  function get_new_state(bytes32 current_state, bytes32 arg) internal pure returns (bytes32) {
-    // Just do some expensive work for the sake of the proof of concept
-    for (uint256 i; i < 1000; ++i) {
-      current_state = keccak256(abi.encodePacked(current_state, arg));
-    }
+  // Returns true if calling the logic contract with the call data results in new state
+  function verify_transition(bytes calldata call_data, bytes32 new_state) internal returns (bool) {
+    // Compute a new state
+    (bool success, bytes memory state_bytes) = logic_address.call(call_data);
 
-    return current_state;
-  }
+    if (!success) return false;
 
-  // Returns true if function with args on current_state results in new_state
-  // TODO: function may throw, so handle that possibility (try/catch)
-  function verify_transition(
-    bytes32 current_state,
-    bytes32 arg,
-    bytes32 new_state
-  ) internal pure returns (bool) {
-    return get_new_state(current_state, arg) == new_state;
+    // Decode new state from returns bytes, reusing the state variable
+    bytes32 state = abi.decode(state_bytes, (bytes32));
+
+    return state == new_state;
   }
 
   // Set the account state to the on-chain computed new state, if the account is not locked
-  function perform(bytes32 state, bytes32 arg) public {
+  function perform(bytes calldata call_data) external payable {
     address user = msg.sender;
     require(lockers[user] == address(0), "ACCOUNT_LOCKED");
 
-    // Check that the current state is the only state, the args root is empty, and the last block is 0
-    require(keccak256(abi.encodePacked(state, bytes32(0), bytes32(0))) == account_states[user], "INVALID_ROOTS");
+    // Extract current state (S_0) from calldata (32 bytes starting after the function signature)
+    bytes32 state = abi.decode(call_data[4:], (bytes32));
 
-    // Compute a new state, reusing the state variable
-    state = get_new_state(state, arg);
+    // Check that the user it not in an optimistic state, which means that their account state is
+    // an empty call data tree, current state (S_0), and the last block is 0
+    require(keccak256(abi.encodePacked(bytes32(0), state, bytes32(0))) == account_states[user], "INVALID_ROOTS");
 
-    // Set the account state to the new state, combined with no prior args, and last time 0
-    account_states[user] = keccak256(abi.encodePacked(state, bytes32(0), bytes32(0)));
+    // Compute a new state (S_1)
+    (bool success, bytes memory state_bytes) = logic_address.call{ value: msg.value }(call_data);
+    require(success, "CALL_FAILED");
 
-    emit New_State(user, state);
+    // Decode new state (S_1) from returned bytes, reusing the state variable
+    state = abi.decode(state_bytes, (bytes32));
+
+    // Set the account state to an empty call data tree, the new state (S_1), and last time 0
+    account_states[user] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));
   }
 
   // Exits optimism by setting the account state to the on-chain computed new state, if the account is not locked
   function perform_and_exit(
-    uint256 transition_index,
-    bytes32 state,
-    bytes32 arg,
-    bytes32 args_root,
-    bytes32 states_root,
-    bytes32[] memory state_proof,
+    bytes calldata call_data,
+    bytes32 call_data_root,
     uint256 last_time
-  ) public {
+  ) external payable {
     address user = msg.sender;
     require(lockers[user] == address(0), "ACCOUNT_LOCKED");
     require(rollback_sizes[user] == 0, "ROLLBACK_REQUIRED");
 
-    // Check that the provided tree roots and last time are valid for this user
-    require(keccak256(abi.encodePacked(states_root, args_root, bytes32(last_time))) == account_states[user], "INVALID_ROOTS");
+    // Extract current state (S_n) from call data (32 bytes starting after the function signature)
+    bytes32 state = abi.decode(call_data[4:], (bytes32));
+
+    // Check that the call data root, current state (S_n), and last time are valid for this user
+    require(
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[user],
+      "INVALID_ROOTS"
+    );
 
     // Check that enough time has elapsed for potential fraud proofs (10 minutes)
     require(last_time + 600 < block.timestamp, "INSUFFICIENT_TIME");
 
-    // Check that the the provided state is in the merkle tree
-    require(Merkle_Library.element_exists(states_root, transition_index, state, state_proof), "INVALID_STATE");
+    // Compute a new state (S_n+1)
+    (bool success, bytes memory state_bytes) = logic_address.call{ value: msg.value }(call_data);
+    require(success, "CALL_FAILED");
 
-    // Check that the index of the provided state (the transition index) is the last state
-    require(transition_index == uint256(state_proof[0]) - 1);
+    // Decode new state (S_n+1) from returned bytes, reusing the state variable
+    state = abi.decode(state_bytes, (bytes32));
 
-    // Compute a new state, reusing state variable
-    state = get_new_state(state, arg);
+    // Set the account state to an empty call data tree, the new state (S_n+1), and last time 0
+    // Since this is an exit of optimism, this new state (S_n+1) is now the zero state (S_0)
+    account_states[user] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));
 
-    // Set the account state to the new state, combined with no prior args, and last time 0
-    account_states[user] = keccak256(abi.encodePacked(state, bytes32(0), bytes32(0)));
-    
-    emit New_State(user, state);
+    emit Exited_Optimism(user);
   }
 
-  // Enters optimism by setting the account state to the optimistic new state and arg, if the account is not locked
-  function perform_optimistically_and_enter(bytes32 arg, bytes32[] memory states) public {
-    address user = msg.sender;
-    require(lockers[user] == address(0), "ACCOUNT_LOCKED");
-
-    // Check that only 2 states (current and new) are provided
-    require(states.length == 2, "INVALID_REQUEST");
-
-    // Check that the current state is the only state, the args root is empty, and the last time is 0
-    require(keccak256(abi.encodePacked(states[0], bytes32(0), bytes32(0))) == account_states[user], "INVALID_ROOTS");
-
-    // Get states root from merkle root of a 2-element tree
-    bytes32[] memory proof = new bytes32[](1);
-    proof[0] = bytes32(0);
-    bytes32 states_root = Merkle_Library.try_append_many(bytes32(0), states, proof);
-
-    // Get args root from merkle root of a 1-element tree, reusing arg var as states tree root
-    arg = Merkle_Library.try_append_one(bytes32(0), arg, proof);
-
-    // Combined states root, args root, current time into account state
-    account_states[user] = keccak256(abi.encodePacked(states_root, arg, bytes32(block.timestamp)));
-
-    emit New_Optimistic_State(user, block.timestamp);
-  }
-
-  // Updates the account state with the optimistic new state and arg, if the account is not locked
-  function perform_optimistically(
-    uint256 transition_index,
-    bytes32 current_state,
-    bytes32 arg,
+  // Enters optimism by updating the account state optimistically with call data and a new state, if the account is not locked
+  function perform_optimistically_and_enter(
+    bytes calldata call_data,
     bytes32 new_state,
-    bytes32 args_root,
-    bytes32[] memory arg_append_proof,
-    bytes32 states_root,
-    bytes32[] memory state_single_proof,
-    uint256 last_time
-  ) public {
+    bytes32[] calldata proof
+  ) external {
     address user = msg.sender;
     require(lockers[user] == address(0), "ACCOUNT_LOCKED");
 
-    // Check that the current state (and thereby transition_index) provided is the last (current_state_proof[0] is the tree size)
-    require(transition_index == uint256(state_single_proof[0]) - 1);
+    // Extract current state (S_0) from call data (32 bytes starting after the function signature)
+    bytes32 state = abi.decode(call_data[4:], (bytes32));
 
-    // Check that the provided tree roots and last time are valid for this user
-    require(keccak256(abi.encodePacked(states_root, args_root, bytes32(last_time))) == account_states[user], "INVALID_ROOTS");
+    // Check that the user it not in an optimistic state, which means that their account state is
+    // an empty call data tree, current state (S_0), and the last block is 0
+    require(keccak256(abi.encodePacked(bytes32(0), state, bytes32(0))) == account_states[user], "INVALID_ROOTS");
 
-    // Get the new states root
-    states_root = Merkle_Library.try_append_one_using_one(
-      states_root,
-      transition_index,
-      current_state,
-      new_state,
-      state_single_proof
+    // Get root of new merkle tree with 1 call data element (CD_0), reusing state as call_data_root
+    state = Merkle_Library_CBS.try_append_one(bytes32(0), call_data, proof);
+
+    // Combine call data root, new state (S_1), and current time into account state
+    account_states[user] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
+
+    emit New_Optimistic_State(user, block.timestamp);
+  }
+
+  // Updates the account state optimistically with call data and a new state, if the account is not locked
+  function perform_optimistically(
+    bytes calldata call_data,
+    bytes32 new_state,
+    bytes32 call_data_root,
+    bytes32[] calldata proof,
+    uint256 last_time
+  ) external {
+    address user = msg.sender;
+    require(lockers[user] == address(0), "ACCOUNT_LOCKED");
+
+    // Extract current state (S_n) from call data (32 bytes starting after the function signature)
+    bytes32 state = abi.decode(call_data[4:], (bytes32));
+
+    // Check that the call data root, current state (S_n), and last time are valid for this user
+    require(
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[user],
+      "INVALID_ROOTS"
     );
 
-    // Get the new args root
-    args_root = Merkle_Library.try_append_one(args_root, arg, arg_append_proof);
+    // Get new merkle root of call data tree, appending call data (CD_n), reusing state as call_data_root
+    state = Merkle_Library_CBS.try_append_one(call_data_root, call_data, proof);
 
-    // Combine both roots with the current time, into the account state
-    account_states[user] = keccak256(abi.encodePacked(states_root, args_root, bytes32(block.timestamp)));
+    // Combine call data root, new state (S_n+1), and current time into account state
+    account_states[user] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
 
     emit New_Optimistic_State(user, block.timestamp);
   }
 
-  // Enters optimism by setting the account state to the optimistic new states and args, if the account is not locked
-  function perform_many_optimistically_and_enter(bytes32[] memory args, bytes32[] memory states) public {
+  // Enters optimism by updating the account state optimistically with several call data and final state, if the account is not locked
+  function perform_many_optimistically_and_enter(
+    bytes[] calldata call_data,
+    bytes32 new_state,
+    bytes32[] calldata proof
+  ) external {
     address user = msg.sender;
     require(lockers[user] == address(0), "ACCOUNT_LOCKED");
 
-    // Check that only there are 1 more states than args, and at least 2 states (current and at least 1 new)
-    uint256 states_length = states.length;
-    require((states_length > 1) && (states_length == args.length + 1), "INVALID_REQUEST");
+    // Check that there is more than 1 call data (if not, user should have called perform_optimistically_and_enter)
+    require(call_data.length > 1, "INSUFFICIENT_CALLDATA");
 
-    // Check that the current state is the only state, the args root is empty, and the last time is 0
-    require(keccak256(abi.encodePacked(states[0], bytes32(0), bytes32(0))) == account_states[user], "INVALID_ROOTS");
+    // Extract current state (S_0) from first call data (32 bytes starting after the function signature)
+    bytes32 state = abi.decode(call_data[0][4:], (bytes32));
 
-    // Get states root from merkle root of states tree
-    bytes32[] memory proof = new bytes32[](1);
-    proof[0] = bytes32(0);
-    bytes32 states_root = Merkle_Library.try_append_many(bytes32(0), states, proof);
+    // Check that the user it not in an optimistic state, which means that their account state is
+    // an empty call data tree, current state (S_0), and the last block is 0
+    require(keccak256(abi.encodePacked(bytes32(0), state, bytes32(0))) == account_states[user], "INVALID_ROOTS");
 
-    // Get args root from merkle root of args tree
-    bytes32 args_root = Merkle_Library.try_append_many(bytes32(0), args, proof);
+    // Get root of new merkle tree with several call data elements (CD_0 - CD_n-1), reusing state as call_data_root
+    state = Merkle_Library_CBS.try_append_many(bytes32(0), call_data, proof);
 
-    // Combined states root, args root, current time into account state
-    account_states[user] = keccak256(abi.encodePacked(states_root, args_root, bytes32(block.timestamp)));
+    // Combine call data root, new state (S_n), and current time into account state
+    account_states[user] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
 
-    emit New_Optimistic_State(user, block.timestamp);
+    emit New_Optimistic_States(user, block.timestamp);
   }
 
-  // Updates the account state with the optimistic new states and args, if the account is not locked
+  // Updates the account state optimistically with several call data and final state, if the account is not locked
   function perform_many_optimistically(
-    uint256 transition_index,
-    bytes32 current_state,
-    bytes32[] memory args,
-    bytes32[] memory new_states,
-    bytes32 args_root,
-    bytes32[] memory arg_append_proof,
-    bytes32 states_root,
-    bytes32[] memory state_single_proof,
+    bytes[] calldata call_data,
+    bytes32 new_state,
+    bytes32 call_data_root,
+    bytes32[] calldata proof,
     uint256 last_time
-  ) public {
+  ) external {
     address user = msg.sender;
     require(lockers[user] == address(0), "ACCOUNT_LOCKED");
 
-    // Check that the current_state (and thereby transition_index) provided is the last (current_state_proof[0] is the tree size)
-    require(transition_index == uint256(state_single_proof[0]) - 1);
+    // Check that there is more than 1 call data (if not, user should have called perform_optimistically)
+    require(call_data.length > 1, "INSUFFICIENT_CALLDATA");
 
-    // Check that the provided tree roots and last time are valid for this user
-    require(keccak256(abi.encodePacked(states_root, args_root, bytes32(last_time))) == account_states[user], "INVALID_ROOTS");
+    // Extract current state (S_n) from first call data (32 bytes starting after the function signature)
+    bytes32 state = abi.decode(call_data[0][4:], (bytes32));
 
-    // Get the new states root
-    states_root = Merkle_Library.try_append_many_using_one(
-      states_root,
-      transition_index,
-      current_state,
-      new_states,
-      state_single_proof
+    // Check that the call data root, current state (S_n), and last time are valid for this user
+    require(
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[user],
+      "INVALID_ROOTS"
     );
 
-    // Get the new args root
-    args_root = Merkle_Library.try_append_many(args_root, args, arg_append_proof);
+    // Get new merkle root of call data tree, appending several call data (CD_n - CD_n+m), reusing state as call_data_root
+    state = Merkle_Library_CBS.try_append_many(call_data_root, call_data, proof);
 
-    // Combine both roots with the current time, into the account state
-    account_states[user] = keccak256(abi.encodePacked(states_root, args_root, bytes32(block.timestamp)));
+    // Combine call data root, new state (S_n+m), and current time into account state
+    account_states[user] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
 
     emit New_Optimistic_States(user, block.timestamp);
   }
 
   // Lock two users (suspect and accuser)
-  function lock_user(address suspect) public payable {
+  function lock_user(address suspect) external payable {
     address accuser = msg.sender;
 
     // The accuser and the suspect cannot already be locked
@@ -287,17 +280,20 @@ contract Optimistic_Roll_In {
   // Unlock two users (suspect and accuser)
   function unlock(
     address suspect,
-    bytes32 states_root,
-    bytes32 args_root,
+    bytes32 state,
+    bytes32 call_data_root,
     uint256 last_time
-  ) public {
+  ) external {
     // Can only unlock a locked account if enough time has passed, and rollback not required
     require(lockers[suspect] != address(0), "ALREADY_UNLOCKED");
     require(locked_times[suspect] + 600 <= block.timestamp, "INSUFFICIENT_WINDOW");
     require(rollback_sizes[suspect] == 0, "REQUIRES_ROLLBACK");
 
-    // Check that the provided tree roots and last time are valid for this user
-    require(keccak256(abi.encodePacked(states_root, args_root, bytes32(last_time))) == account_states[suspect], "INVALID_ROOTS");
+    // Check that the call data root, current state (S_n), and last time are valid for this user
+    require(
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[suspect],
+      "INVALID_ROOTS"
+    );
 
     // Unlock both accounts
     address accuser = lockers[suspect];
@@ -312,8 +308,9 @@ contract Optimistic_Roll_In {
     balances[accuser] = 0;
     balances[suspect] += amount;
 
-    // Combine both roots with the current time, into the account state (updating last time is important)
-    account_states[suspect] = keccak256(abi.encodePacked(states_root, args_root, bytes32(block.timestamp)));
+    // Combine call data root, current state (S_n), and current time into account state
+    // Note: updating last time is important, to prevent user blocking fraud proofs by locking themselves
+    account_states[suspect] = keccak256(abi.encodePacked(call_data_root, state, bytes32(block.timestamp)));
 
     emit Unlocked(suspect, accuser);
   }
@@ -321,109 +318,123 @@ contract Optimistic_Roll_In {
   // Reward accuser for proving fraud in a suspect's transition, and track the expected rolled back account state size
   function prove_fraud(
     address suspect,
-    uint256 transition_index,
-    bytes32 arg,
-    bytes32[] memory states,
-    bytes32 args_root,
-    bytes32[] memory arg_proof,
-    bytes32 states_root,
-    bytes32[] memory states_proof,
+    bytes[] calldata call_data,
+    bytes32 state,
+    bytes32 call_data_root,
+    bytes32[] calldata proof,
     uint256 last_time
-  ) public {
+  ) external {
     address accuser = msg.sender;
 
     // Only the user that flagged/locked the suspect can prove fraud
     require(lockers[suspect] == accuser, "NOT_LOCKER");
 
-    // Check that the provided tree roots and last time are valid for this suspect
-    require(keccak256(abi.encodePacked(states_root, args_root, bytes32(last_time))) == account_states[suspect], "INVALID_ROOTS");
+    // Check that the call data root, current state (S_n), and last time are valid for this user
+    require(
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[suspect],
+      "INVALID_ROOTS"
+    );
 
-    // Check that states and args involved in that transition index exist in their respective roots
-    require(Merkle_Library.elements_exist(states_root, states, states_proof), "INVALID_STATES");
-    require(Merkle_Library.element_exists(args_root, transition_index, arg, arg_proof), "INVALID_ARG");
+    // Check that the call data exist
+    require(Merkle_Library_CBS.elements_exist(call_data_root, call_data, proof), "INVALID_CALLDATA");
 
-    // Check that states provided are consecutive and regarding that transition index
-    uint256[] memory state_indices = Merkle_Library.get_indices(states, states_proof);
-    require(state_indices[0] == transition_index);
-    require(state_indices[1] == transition_index + 1);
+    // get the indices of the call data in the call data tre
+    uint256[] memory call_data_indices = Merkle_Library_CBS.get_indices(call_data, proof);
 
-    // Fail if the state transition was valid
-    require(verify_transition(states[0], arg, states[1]) == false, "VALID_TRANSITION");
+    // The transition index is the index of the starting call data of the fraud proof
+    uint256 transition_index = call_data_indices[0];
 
-    // Take the suspect's bond and give it to the accuser
+    // If only one call data is provided, the fraud involves the last call data and current state
+    if (call_data.length == 1) {
+      // Check that the call data index is the last (call data tree size minus 1)
+      require(transition_index + 1 == uint256(proof[0]), "INCORRECT_CALLDATA");
+
+      // Fail if the state transition was valid
+      require(verify_transition(call_data[0], state) == false, "VALID_TRANSITION");
+    } else {
+      // Check that call data provided are consecutive
+      require(transition_index + 1 == call_data_indices[1]);
+
+      // Extract new state from second call data (32 bytes starting after the function signature), reusing state var
+      state = abi.decode(call_data[1][4:], (bytes32));
+
+      // Fail if the state transition was valid
+      require(verify_transition(call_data[0], state) == false, "VALID_TRANSITION");
+    }
+
+    // Take the suspect's bond and give it to the accuser, reusing last_time var
     // TODO: consider burning some here to prevent self-reporting breakeven
-    uint256 amount = balances[suspect];
+    last_time = balances[suspect];
     balances[suspect] = 0;
-    balances[accuser] += amount;
+    balances[accuser] += last_time;
 
     // Unlock the accuser's account
     lockers[accuser] = address(0);
     locked_times[accuser] = 0;
 
-    // Set the rollback size to the amount of elements that should be in the states tree once rolled back
-    rollback_sizes[suspect] = transition_index + 1;
+    // Set the rollback size to the amount of elements that should be in the call data tree once rolled back
+    rollback_sizes[suspect] = transition_index;
 
     // Set the suspect as the reason for their account's lock
     lockers[suspect] = suspect;
     locked_times[suspect] = 0;
 
-    emit Fraud_Proven(accuser, suspect, transition_index, amount);
+    emit Fraud_Proven(accuser, suspect, transition_index, last_time);
   }
 
   // Rolls a user back, given the current roots, old roots, and a proof of the optimistic transitions between them
-  // Note: This can be improved to allow incremental rollbacks until the rollback size is met
   function rollback(
-    bytes32 old_args_root,
-    bytes32 old_states_root,
-    bytes32[] memory rolled_back_args,
-    bytes32[] memory rolled_back_states,
-    bytes32 args_root,
-    bytes32[] memory arg_append_proof,
-    bytes32 states_root,
-    bytes32[] memory state_append_proof,
+    bytes32 rolled_back_call_data_root,
+    bytes[] calldata rolled_back_call_data,
+    bytes32[] calldata roll_back_proof,
+    uint256 current_size,
+    bytes32 current_size_proof,
+    bytes32 call_data_root,
+    bytes32 state,
     uint256 last_time
-  ) public payable {
+  ) external payable {
     address user = msg.sender;
     uint256 expected_size = rollback_sizes[user];
     require(expected_size != 0, "ROLLBACK_UNNECESSARY");
 
-    // Check that the rolled back args and rolled back states match in length
-    require(rolled_back_args.length == rolled_back_states.length, "LENGTH_MISMATCH");
-
-    // Check that the size of the old, rolled back, states tree (defined by the states append proof) is as expected
-    require(uint256(state_append_proof[0]) == expected_size, "INVALID_ROLLBACK");
-
-    // Decrement here because arg tree is always one smaller in size
-    expected_size -= 1;
-
-    // Check that the size of the old, rolled back, args tree (defined by the args append proof) is as expected
-    require(uint256(arg_append_proof[0]) == expected_size, "INVALID_ROLLBACK");
-
-    // Check that the provided tree roots and last time are valid for this user
-    require(keccak256(abi.encodePacked(states_root, args_root, bytes32(last_time))) == account_states[user], "INVALID_ROOTS");
-
-    // Check that the states root is derived from appending the rolled back states to the old states root
+    // Check that the call data root, current state (S_n), and last time are valid for this user
     require(
-      Merkle_Library.try_append_many(old_states_root, rolled_back_states, state_append_proof) == states_root,
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[user],
+      "INVALID_ROOTS"
+    );
+
+    // Check that the provided size of the current call data tree is correct
+    require(Merkle_Library_CBS.verify_size(call_data_root, current_size, current_size_proof), "INVALID_SIZE");
+
+    // Allow incremental roll back by checking that the rolled back call data tree is smaller than the current tree
+    uint256 rolled_back_size = uint256(roll_back_proof[0]);
+    require(rolled_back_size < current_size, "INSUFFICIENT_ROLLBACK");
+
+    // Check that this is not rolling back too far, though
+    require(rolled_back_size >= expected_size, "ROLLBACK_TOO_DEEP");
+
+    // Check that the current call data root is derived by appending the rolled back call data to the rolled back call data root
+    require(
+      Merkle_Library_CBS.try_append_many(rolled_back_call_data_root, rolled_back_call_data, roll_back_proof) ==
+        call_data_root,
       "INVALID_ROLLBACK"
     );
 
-    // Check that the args root is derived from appending the rolled back args to the old args root
-    require(
-      Merkle_Library.try_append_many(old_args_root, rolled_back_args, arg_append_proof) == args_root,
-      "INVALID_ROLLBACK"
-    );
+    // Extract new state from first rolled back call data (32 bytes starting after the function signature), reusing state var
+    state = abi.decode(rolled_back_call_data[0][4:], (bytes32));
 
-    // Combine both roots with the current time, into the account state
-    account_states[user] = keccak256(abi.encodePacked(old_states_root, old_args_root, bytes32(block.timestamp)));
+    // Combine rolled back call data root, new state (S_n-m), and current time into account state
+    account_states[user] = keccak256(abi.encodePacked(rolled_back_call_data_root, state, bytes32(block.timestamp)));
 
-    // Unlock the user and clear the rollback flag
-    lockers[user] = address(0);
-    rollback_sizes[user] = 0;
+    // Unlock the user and clear the rollback flag, if roll back is complete
+    if (rolled_back_size == expected_size) {
+      lockers[user] = address(0);
+      rollback_sizes[user] = 0;
+    }
 
     // The user may be trying to bond at the same time (this also check that have enough bonded)
     bond(user);
 
-    emit Rolled_Back(user, expected_size, block.timestamp);
+    emit Rolled_Back(user, rolled_back_size, block.timestamp);
   }
 }

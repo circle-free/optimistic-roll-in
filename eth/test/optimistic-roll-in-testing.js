@@ -4,14 +4,17 @@ const { Keccak } = require('sha3');
 const crypto = require('crypto');
 const { MerkleTree, PartialMerkleTree } = require('merkle-trees/js');
 const txDecoder = require('ethereum-tx-decoder');
-const { abi: contractABI } = require('../build/contracts/Optimistic_Roll_In.json');
+const { abi: optimismABI } = require('../build/contracts/Optimistic_Roll_In.json');
+const { abi: logicABI } = require('../build/contracts/Some_Logic_Contract.json');
+const { SSL_OP_MICROSOFT_BIG_SSLV3_BUFFER } = require('constants');
 
-const Optimistic_Roll_In = artifacts.require("Optimistic_Roll_In");
+const OptimisticRollIn = artifacts.require("Optimistic_Roll_In");
+const SomeLogicContract = artifacts.require("Some_Logic_Contract");
 
 const treeOptions = {
   unbalanced: true,
   sortedHash: false,
-  elementPrefix: '0000000000000000000000000000000000000000000000000000000000000000',
+  elementPrefix: '00',
 };
 
 const leftPad = (num, size, char = '0') => {
@@ -81,20 +84,18 @@ contract.only("Optimistic Roll In", accounts => {
     let suspect = accounts[0];
     let accuser = accounts[1];
 
+    let logicContractInstance = null;
+    let logicAddress = null;
     let contractInstance = null;
     let bondAmount = null;
+    let callDataTree = null;
     let currentState = null;
-    let statesTree = null;
-    let argsTree = null;
     let lastTime = null;
-    let fraudulentTxId = null;
     let fraudulentTransitionIndex = null;
-    let statesPartialTree = null;
-    let argsPartialTree = null;
+    let fraudulentTxId = null;
+    let callDataPartialTree = null;
     let txIdAfterFraudulentTxId = null;
     let accuserBondAmount = null;
-    let rollbackSize = null;
-    
 
     // The Story
     //  - A user will bond and initialize their account
@@ -104,23 +105,26 @@ contract.only("Optimistic Roll In", accounts => {
     //  - This user will perform 100 valid optimistic state transitions in batch (1 transaction)
     //  - This user (hereby called the suspect) will perform another 100 optimistic state transitions in batch, but inject an invalid transition somewhere in there
     //  - Another user (hereby called the accuser) will be able to detect the fraudulent transition in that transaction
-    //  - The accuser uses just the fraudulent transaction's data to build Partial Merkle Trees that can be used to create a fraud proof
+    //  - The accuser uses just the fraudulent transaction's data to build a Partial Merkle Tree that can be used to create a fraud proof
     //  - The accuser need to lock the suspect's account for long enough that a fraud proof can be built without the suspect's account roots changing on-chain
     //  - Before the accuser can lock the suspect's account, the suspect performs another valid state transition
     //  - The accuser finally locks the suspect's account, and, to discourage a DOS, the accuser also bond's themselves
-    //  - The accuser is able to update their Partial Merkle Trees with the transition data in the suspect's last transaction
-    //  - The accuser uses the Partial Merkle Trees to build a fraud proof to demonstrate the exact transition number/index where the fraudulent transition happened
+    //  - The accuser is able to update their Partial Merkle Tree with the transition data in the suspect's last transaction
+    //  - The accuser uses the Partial Merkle Tree to build a fraud proof to demonstrate the exact transition that was fraudulent
     //  - The suspect is further locked from making transitions until they roll back their account roots
-    //  - The contract is therefore aware of the expected size of their account trees, given the above transition number/index
+    //  - The contract is therefore aware of the expected post-roll-back size of their call data tree
     //  - The accuser is rewarded with the suspect's bond for having proven all of this
     //  - The accuser withdraws their account balance, which is their original bond, plus their reward (the suspect's original bond)
-    //  - The suspect constructs new account Merkle Trees of the expected size, and proves to the contract that these are valid prior version of the account trees (Rollback Proof)
+    //  - The suspect constructs a new call data Merkle Tree of the expected size, and proves to the contract that it's valid prior version of the call data tree (Rollback Proof)
     //  - The suspect also re-bonds themselves at the same time as the rollback
     //  - The suspect (now a normal user) carries on to perform 100 valid optimistic state transitions in batch
     //  - This user will perform 1 non-optimistic (on-chain computed) state transition to exit optimism
+    //  - This user will perform 50 optimistic valid optimistic state transitions in batch to reenter optimism
 
     before(async () => {
-      contractInstance = await Optimistic_Roll_In.new();
+      logicContractInstance = await SomeLogicContract.new();
+      logicAddress = logicContractInstance.address;
+      contractInstance = await OptimisticRollIn.new(logicAddress);
     });
 
     it("can bond a user (who will eventually be the guilty suspect).", async () => {
@@ -128,21 +132,23 @@ contract.only("Optimistic Roll In", accounts => {
       const { receipt, logs } = await contractInstance.bond(suspect, { value: bondAmount, from: suspect });
       const balance = await contractInstance.balances(suspect);
 
-      // expect(receipt.gasUsed).to.equal(42616);
       expect(balance.toString()).to.equal(bondAmount);
+      expect(receipt.gasUsed).to.equal(42728);
     });
 
     it("can initialize a user (suspect).", async () => {
       // When initialized, the suspect's account state will b an empty states tree, args tree, and the last optimistic time will be 0
       const { receipt, logs } = await contractInstance.initialize({ from: suspect });
+      callDataTree = new MerkleTree([], treeOptions);
       currentState = to32ByteBuffer(0);
+      lastTime = 0; 
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([currentState, to32ByteBuffer(0), to32ByteBuffer(0)]);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
       const expectedAccountStateHex = '0x' + expectedAccountState.toString('hex');
 
-      // expect(receipt.gasUsed).to.equal(43472);
       expect(accountState).to.equal(expectedAccountStateHex);
+      expect(receipt.gasUsed).to.equal(43423);
     });
 
     it("allows a user (suspect) to perform a normal state transition (and remain outside of optimism).", async () => {
@@ -150,382 +156,377 @@ contract.only("Optimistic Roll In", accounts => {
       const argHex = '0x' + arg.toString('hex');
       const currentStateHex = '0x' + currentState.toString('hex');
 
-      const { receipt, logs } = await contractInstance.perform(currentStateHex, argHex, { from: suspect });
+      // Get the call logic contract address and call data from a logic request
+      const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
+        currentStateHex,
+        argHex,
+        { from: suspect }
+      );
+
+      const { receipt, logs } = await contractInstance.perform(
+        callDataHex,
+        { from: suspect }
+      );
 
       // Compute the new state from the current state (which is the last state) and the arg
-      const expectedNewState = getNewState(currentState, arg);
-      const expectedNewStateHex = expectedNewState.toString('hex');
-
-      // Get the new state from the event, since its needed for subsequent performs
-      currentState = Buffer.from(logs[0].args[1].slice(2), 'hex');
+      currentState = getNewState(currentState, arg);
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([currentState, to32ByteBuffer(0), to32ByteBuffer(0)]);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
       const expectedAccountStateHex = '0x' + expectedAccountState.toString('hex');
 
-      // expect(receipt.gasUsed).to.equal(265485);
-
-      expect(logs[0].event).to.equal('New_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(currentState.toString('hex')).to.equal(expectedNewStateHex);
-
       expect(accountState).to.equal(expectedAccountStateHex);
+      expect(receipt.gasUsed).to.equal(286269);
     });
 
     it("allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).", async () => {
-      const arg = generateElements(1, { seed: '44' })[0];
-      const argHex = '0x' + arg.toString('hex');
-      const currentStateHex = '0x' + currentState.toString('hex');
-
-      // Compute the new state from the current state (which is the last state) and the arg
-      const newState = getNewState(currentState, arg);
-      const newStateHex = '0x' + newState.toString('hex');
-
-      // Build states tuple (array of 2)
-      const states = [currentState, newState];
-      const statesHex = [currentStateHex, newStateHex];
-
-      const { receipt, logs } = await contractInstance.perform_optimistically_and_enter(argHex, statesHex, { from: suspect } );
-      const block = await web3.eth.getBlock(receipt.blockNumber);
-      lastTime = block.timestamp;
-      
-      // Since the transaction executed successfully, update the locally maintained merkle trees
-      statesTree = new MerkleTree(states, treeOptions);
-      argsTree = new MerkleTree([arg], treeOptions);
-
-      const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
-
-      // expect(receipt.gasUsed).to.equal(34050);
-
-      expect(logs[0].event).to.equal('New_Optimistic_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
-
-      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
-    });
-
-    it("allows a user (suspect) to perform a valid optimistic state transition.", async () => {
       const arg = generateElements(1, { seed: '55' })[0];
       const argHex = '0x' + arg.toString('hex');
-      const transitionIndex = statesTree.elements.length - 1;
-      const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
-      const statesRootHex = '0x' + statesTree.root.toString('hex');
-      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new state from the current state (which is the last state) and the arg
       const newState = getNewState(currentState, arg);
       const newStateHex = '0x' + newState.toString('hex');
 
-      // Build the Single Proof, to prove the existence of the last state, that also enables the appending of a new state to the states tree
-      const { proof: stateProof, newMerkleTree: newStatesTree } = statesTree.useAndAppend(transitionIndex, newState, proofOptions);
-      const { compactProof: stateSingleProof } = stateProof;
-      const stateSingleProofHex = stateSingleProof.map(p => '0x' + p.toString('hex'));
-
-      // Build an Append Proof that enables appending a new arg to the args tree
-      const { proof: argProof, newMerkleTree: newArgsTree } = argsTree.appendSingle(arg, proofOptions);
-      const { compactProof: argAppendProof } = argProof;
-      const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
-
-      const { receipt, logs } = await contractInstance.perform_optimistically(
-        transitionIndex,
+      // Get the call logic contract address and call data from a logic request
+      const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
         currentStateHex,
         argHex,
-        newStateHex,
-        argsRootHex,
-        argAppendProofHex,
-        statesRootHex,
-        stateSingleProofHex,
-        lastTime,
         { from: suspect }
       );
+      
+      const callData = Buffer.from(callDataHex.slice(2), 'hex');
 
+      // Get the expect new call data tree and append proof
+      const { proof, newMerkleTree } = callDataTree.appendSingle(callData, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
+
+      const { receipt, logs } = await contractInstance.perform_optimistically_and_enter(
+        callDataHex,
+        newStateHex,
+        proofHex,
+        { from: suspect }
+      );
+      
+      // Since the transaction executed successfully, update the locally maintained variables
       const block = await web3.eth.getBlock(receipt.blockNumber);
       lastTime = block.timestamp;
-      
-      // Since the transaction executed successfully, update the locally maintained merkle trees
-      statesTree = newStatesTree;
-      argsTree = newArgsTree;
+      callDataTree = newMerkleTree;
+      currentState = newState;
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
-
-      // expect(receipt.gasUsed).to.equal(38671);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
 
       expect(logs[0].event).to.equal('New_Optimistic_State');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(33908);
+    });
+
+    it("allows a user (suspect) to perform a valid optimistic state transition.", async () => {
+      const arg = generateElements(1, { seed: '66' })[0];
+      const argHex = '0x' + arg.toString('hex');
+      const currentStateHex = '0x' + currentState.toString('hex');
+      const proofOptions = { compact: true };
+
+      // Compute the new state from the current state (which is the last state) and the arg
+      const newState = getNewState(currentState, arg);
+      const newStateHex = '0x' + newState.toString('hex');
+
+      // Get the call logic contract address and call data from a logic request
+      const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
+        currentStateHex,
+        argHex,
+        { from: suspect }
+      );
+      
+      const callData = Buffer.from(callDataHex.slice(2), 'hex');
+
+      // Build an Append Proof that enables appending a new call data to the call data tree
+      const { proof, newMerkleTree } = callDataTree.appendSingle(callData, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
+
+      const callDataRootHex = '0x' + callDataTree.root.toString('hex');
+
+      const { receipt, logs } = await contractInstance.perform_optimistically(
+        callDataHex,
+        newStateHex,
+        callDataRootHex,
+        proofHex,
+        lastTime,
+        { from: suspect }
+      );
+
+      // Since the transaction executed successfully, update the locally maintained variables
+      const block = await web3.eth.getBlock(receipt.blockNumber);
+      lastTime = block.timestamp;
+      callDataTree = newMerkleTree;
+      currentState = newState;
+
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
+
+      expect(logs[0].event).to.equal('New_Optimistic_State');
+      expect(logs[0].args[0]).to.equal(suspect);
+      expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
+
+      expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(35707);
     });
 
     it("allows a user (suspect) to perform valid optimistic state transitions in batch.", async () => {
       const transitions = 100;
-      const args = generateElements(transitions, { seed: '66' });
+      const args = generateElements(transitions, { seed: '77' });
       const argsHex = args.map(a => '0x' + a.toString('hex'));
-      const transitionIndex = statesTree.elements.length - 1;
-      const currentState = statesTree.elements[transitionIndex];
-      const currentStateHex = '0x' + currentState.toString('hex');
-      const statesRootHex = '0x' + statesTree.root.toString('hex');
-      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new states from the current state (which is the last state) and the args
-      const newStates = [];
+      const callDataArray = [];
+      let interimState = currentState;
       
       for (let i = 0; i < transitions; i++) {
-        const newState = i === 0
-          ? getNewState(currentState, args[i])
-          : getNewState(newStates[i - 1], args[i]);
+        const interimStateHex = '0x' + interimState.toString('hex');
 
-        newStates.push(newState);
+        // Get the call data from a logic request
+        const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
+          interimStateHex,
+          argsHex[i],
+          { from: suspect }
+        );
+        
+        // Append call data to array, and update interim state
+        const callData = Buffer.from(callDataHex.slice(2), 'hex');
+        callDataArray.push(callData);
+        interimState = getNewState(interimState, args[i]);
       }
 
-      const newStatesHex = newStates.map(s => '0x' + s.toString('hex'));
-      
-      // Build the Single Proof, to prove the existence of the last state, that also enables the appending of several new states to the states tree
-      const { proof: stateProof, newMerkleTree: newStatesTree } = statesTree.useAndAppend(transitionIndex, newStates, proofOptions);
-      const { compactProof: stateMultiProof } = stateProof;
-      const stateMultiProofHex = stateMultiProof.map(p => '0x' + p.toString('hex'));
+      const callDataArrayHex = callDataArray.map(c => '0x' + c.toString('hex'));
+      const newStateHex = '0x' + interimState.toString('hex');
+      const callDataRootHex = '0x' + callDataTree.root.toString('hex');
 
-      // Build an Append Proof that enables appending new args to the args tree
-      const { proof: argProof, newMerkleTree: newArgsTree } = argsTree.appendMulti(args, proofOptions);
-      const { compactProof: argAppendProof } = argProof;
-      const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
+      // Build an Append Proof that enables appending new call data to the call data tree
+      const { proof, newMerkleTree } = callDataTree.appendMulti(callDataArray, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
 
       const { receipt, logs } = await contractInstance.perform_many_optimistically(
-        transitionIndex,
-        currentStateHex,
-        argsHex,
-        newStatesHex,
-        argsRootHex,
-        argAppendProofHex,
-        statesRootHex,
-        stateMultiProofHex,
+        callDataArrayHex,
+        newStateHex,
+        callDataRootHex,
+        proofHex,
         lastTime,
         { from: suspect }
       );
 
+      // Since the transaction executed successfully, update the locally maintained variables
       const block = await web3.eth.getBlock(receipt.blockNumber);
       lastTime = block.timestamp;
-      
-      // Since the transaction executed successfully, update the locally maintained merkle trees
-      statesTree = newStatesTree;
-      argsTree = newArgsTree;
+      callDataTree = newMerkleTree;
+      currentState = interimState;
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
-
-      // expect(receipt.gasUsed).to.equal(285830);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
 
       expect(logs[0].event).to.equal('New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(286083);
     });
 
     it("allows a user (suspect) to perform fraudulent optimistic state transitions in batch.", async () => {
       const transitions = 100;
-      const args = generateElements(transitions, { seed: '66' });
+      const args = generateElements(transitions, { seed: '88' });
       const argsHex = args.map(a => '0x' + a.toString('hex'));
-      const transitionIndex = statesTree.elements.length - 1;
-      const currentState = statesTree.elements[transitionIndex];
-      const currentStateHex = '0x' + currentState.toString('hex');
-      const statesRootHex = '0x' + statesTree.root.toString('hex');
-      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
-
-      // The 21st state transition (0-indexed) here will be fraudulent (incorrect)
       const fraudulentIndex = 20;
+      fraudulentTransitionIndex = callDataTree.elements.length + fraudulentIndex;
 
-      // Overall, this fraudulent transition is the 122nd transition (1 normal, 100 batch, the 21st is incorrect)
-      fraudulentTransitionIndex = transitionIndex + fraudulentIndex;
-      const newStates = [];
+      // Compute the new states from the current state (which is the last state) and the args
+      const callDataArray = [];
+      let interimState = currentState;
       
       for (let i = 0; i < transitions; i++) {
-        const newState = i === 0
-          ? getNewState(currentState, args[i])
-          : i === fraudulentIndex
-            ? to32ByteBuffer(888888)
-            : getNewState(newStates[i - 1], args[i]);
+        const interimStateHex = '0x' + interimState.toString('hex');
 
-        newStates.push(newState);
+        // Get the call data from a logic request
+        const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
+          interimStateHex,
+          argsHex[i],
+          { from: suspect }
+        );
+        
+        // Append call data to array, and update interim state
+        const callData = Buffer.from(callDataHex.slice(2), 'hex');
+        callDataArray.push(callData);
+        
+        // Slip in an incorrect state transition 
+        interimState = i !== fraudulentIndex
+          ? getNewState(interimState, args[i])
+          : to32ByteBuffer(1337);
       }
-      
-      const newStatesHex = newStates.map(s => '0x' + s.toString('hex'));
 
-      // Build the Single Proof, to prove the existence of the last state, that also enables the appending of several new states to the states tree
-      const { proof: stateProof, newMerkleTree: newStatesTree } = statesTree.useAndAppend(transitionIndex, newStates, proofOptions);
-      const { compactProof: stateSingleProof } = stateProof;
-      const stateSingleProofHex = stateSingleProof.map(p => '0x' + p.toString('hex'));
+      const callDataArrayHex = callDataArray.map(c => '0x' + c.toString('hex'));
+      const newStateHex = '0x' + interimState.toString('hex');
+      const callDataRootHex = '0x' + callDataTree.root.toString('hex');
 
-      // Build an Append Proof that enables appending new args to the args tree
-      const { proof: argProof, newMerkleTree: newArgsTree } = argsTree.appendMulti(args, proofOptions);
-      const { compactProof: argAppendProof } = argProof;
-      const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
+      // Build an Append Proof that enables appending new call data to the call data tree
+      const { proof, newMerkleTree } = callDataTree.appendMulti(callDataArray, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
 
       const { receipt, logs } = await contractInstance.perform_many_optimistically(
-        transitionIndex,
-        currentStateHex,
-        argsHex,
-        newStatesHex,
-        argsRootHex,
-        argAppendProofHex,
-        statesRootHex,
-        stateSingleProofHex,
+        callDataArrayHex,
+        newStateHex,
+        callDataRootHex,
+        proofHex,
         lastTime,
         { from: suspect }
       );
-      
-      // Since the transaction executed successfully, update the locally maintained merkle trees
-      statesTree = newStatesTree;
-      argsTree = newArgsTree;
 
+      // Since the transaction executed successfully, update the locally maintained variables
       const block = await web3.eth.getBlock(receipt.blockNumber);
       lastTime = block.timestamp;
-
-      // Save this txId (for the accuser), simulating that the accuser will see this txId and need to validate it later
+      callDataTree = newMerkleTree;
+      currentState = interimState;
       fraudulentTxId = receipt.transactionHash;
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
-
-      // expect(receipt.gasUsed).to.equal(294244);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
 
       expect(logs[0].event).to.equal('New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(289042);
     });
 
-    it("allows a user (accuser) to detect a transaction containing a fraudulent state transition.", async () => {
-      const fnDecoder = new txDecoder.FunctionDecoder(contractABI);
+    it("allows a user (accuser) to immediately detect a transaction containing a fraudulent state transition.", async () => {
+      const optimismDecoder = new txDecoder.FunctionDecoder(optimismABI);
+      const logicDecoder = new txDecoder.FunctionDecoder(logicABI);
 
       // Pull the transaction containing the suspected fraudulent transition
       const fraudulentTx = await web3.eth.getTransaction(fraudulentTxId);
-      const decodedFraudulentData = fnDecoder.decodeFn(fraudulentTx.input);
+      const decodedOptimismData = optimismDecoder.decodeFn(fraudulentTx.input);
+
+      // Pull the transaction receipt containing the suspected fraudulent transition's logs, and last time
+      const fraudulentTxReceipt = await web3.eth.getTransactionReceipt(fraudulentTxId);
+      const lastTimeHex = fraudulentTxReceipt.logs[0].topics[2];
 
       // Pull the transaction receipt of the suspected fraudulent transition, to get the new last time
       // Note: I don't feel like parsing logs, so just pull the timestamp from the block itself
       const block = await web3.eth.getBlock(fraudulentTx.blockNumber);
 
-      // Decode the input data (calldata) to unpack the args, states, and proofs
+      // Decode the optimism input data
       const {
-        sighash,
-        transition_index: transitionIndexBN,
-        current_state: currentStateHex,
-        args: argsHex,
-        new_states: newStatesHex,
-        arg_append_proof: argAppendProofHex,
-        state_single_proof: stateSingleProofHex,
+        sighash: optimismSig,
+        call_data: callDataArrayHex,
+        new_state: newStateHex,
+        call_data_root: callDataRootHex,
+        proof: proofHex,
         last_time: lastTime,
-      } = decodedFraudulentData;
+      } = decodedOptimismData;
 
       // Convert Big Numbers to numbers, and hex strings to Buffers
-      const transitionIndex = transitionIndexBN.toNumber();
-      const currentState = Buffer.from(currentStateHex.slice(2), 'hex');
-      const args = argsHex.map(arg => Buffer.from(arg.slice(2), 'hex'));
-      const newStates = newStatesHex.map(newState => Buffer.from(newState.slice(2), 'hex'));
-      const argAppendProof = argAppendProofHex.map(proof => Buffer.from(proof.slice(2), 'hex'));
-      const stateSingleProof = stateSingleProofHex.map(proof => Buffer.from(proof.slice(2), 'hex'));
+      const callDataArray = callDataArrayHex.map(c => Buffer.from(c.slice(2), 'hex'));
+      const newState = Buffer.from(newStateHex.slice(2), 'hex');
+      const callDataRoot = Buffer.from(callDataRootHex.slice(2), 'hex');
+      const proof = proofHex.map(p => Buffer.from(p.slice(2), 'hex'));
 
       // Compute what the new states should have been, from the original current state (which is the last state) and the args
-      const computedNewStates = [];
-      let fraudulentIndex = -1;
+      for (let i = 0; i < callDataArrayHex.length; i++) {
+        // Decode arg from calldata and compute expected new state
+        const { current_state: startingStateHex, arg: argHex } = logicDecoder.decodeFn(callDataArrayHex[i]);
+        const startingState = Buffer.from(startingStateHex.slice(2), 'hex');
+        const arg = Buffer.from(argHex.slice(2), 'hex');
+        const endState = getNewState(startingState, arg);
 
-      for (let i = 0; i < args.length; i++) {
-        const newState = i === 0
-          ? getNewState(currentState, args[i])
-          : getNewState(computedNewStates[i - 1], args[i]);
+        // Get the provided new state for this transition (final or from next call data)
+        const providedEndState = (i === callDataArrayHex.length - 1)
+          ? newState
+          : Buffer.from(logicDecoder.decodeFn(callDataArrayHex[i + 1]).current_state.slice(2), 'hex');
 
-        computedNewStates.push(newState);
-
-        // If a new state computed does not match what was optimistically provided in the calldata, we found a fraudulent transition
-        if (!newState.equals(newStates[i])) {
-          fraudulentIndex = i;
-          break;
+        // Fraudulent if the new state computed does not match what was optimistically provided
+        if (!endState.equals(providedEndState)) {
+          // Recall that this fraudulent transition should be the 21st (0-indexed) transition in this batch
+          expect(i).to.equals(20);
         }
       }
 
-      // Recall that this fraudulent transition should be the 21st (0-indexed) transition in this batch
-      expect(fraudulentIndex).to.equals(20);
-
-      // Build a partial merkle tree (for the states) from the proof data pulled from this transaction
-      const stateProof = { index: transitionIndex, element: currentState, compactProof: stateSingleProof };
-      statesPartialTree = PartialMerkleTree.fromSingleProof(stateProof, treeOptions).append(newStates);
-
-      // Build a partial merkle tree (for the args) from the proof data pulled from this transaction
-      const argProof = { appendElements: args, compactProof: argAppendProof };
-      argsPartialTree = PartialMerkleTree.fromAppendProof(argProof, treeOptions);
+      // Build a partial merkle tree (for the call data) from the proof data pulled from this transaction
+      const appendProof = { appendElements: callDataArray, compactProof: proof };
+      callDataPartialTree = PartialMerkleTree.fromAppendProof(appendProof, treeOptions);
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesPartialTree.root, argsPartialTree.root, to32ByteBuffer(block.timestamp)]);
+      const expectedAccountState = hashPacked([callDataPartialTree.root, newState, Buffer.from(lastTimeHex.slice(2), 'hex')]);
 
       // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (suspect) to perform a valid optimistic state transition on top of an invalid state.", async () => {
-      const arg = generateElements(1, { seed: '77' })[0];
+      const arg = generateElements(1, { seed: '99' })[0];
       const argHex = '0x' + arg.toString('hex');
-      const transitionIndex = statesTree.elements.length - 1;
-      const currentState = statesTree.elements[transitionIndex];
       const currentStateHex = '0x' + currentState.toString('hex');
-      const statesRootHex = '0x' + statesTree.root.toString('hex');
-      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new state from the current state (which is the last state) and the arg
       const newState = getNewState(currentState, arg);
       const newStateHex = '0x' + newState.toString('hex');
 
-      // Build the Single Proof, to prove the existence of the last state, that also enables the appending of a new state to the states tree
-      const { proof: stateProof, newMerkleTree: newStatesTree } = statesTree.useAndAppend(transitionIndex, newState, proofOptions);
-      const { compactProof: stateSingleProof } = stateProof;
-      const stateSingleProofHex = stateSingleProof.map(p => '0x' + p.toString('hex'));
-
-      // Build an Append Proof that enables appending a new arg to the args tree
-      const { proof: argProof, newMerkleTree: newArgsTree } = argsTree.appendSingle(arg, proofOptions);
-      const { compactProof: argAppendProof } = argProof;
-      const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
-
-      const { receipt, logs } = await contractInstance.perform_optimistically(
-        transitionIndex,
+      // Get the call logic contract address and call data from a logic request
+      const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
         currentStateHex,
         argHex,
+        { from: suspect }
+      );
+      
+      const callData = Buffer.from(callDataHex.slice(2), 'hex');
+
+      // Build an Append Proof that enables appending a new call data to the call data tree
+      const { proof, newMerkleTree } = callDataTree.appendSingle(callData, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
+
+      const callDataRootHex = '0x' + callDataTree.root.toString('hex');
+
+      const { receipt, logs } = await contractInstance.perform_optimistically(
+        callDataHex,
         newStateHex,
-        argsRootHex,
-        argAppendProofHex,
-        statesRootHex,
-        stateSingleProofHex,
+        callDataRootHex,
+        proofHex,
         lastTime,
         { from: suspect }
       );
 
+      // Since the transaction executed successfully, update the locally maintained variables
       const block = await web3.eth.getBlock(receipt.blockNumber);
       lastTime = block.timestamp;
-      
-      // Since the transaction executed successfully, update the locally maintained merkle trees
-      statesTree = newStatesTree;
-      argsTree = newArgsTree;
-
-      // Save this txId (for the accuser), simulating that the accuser will see this txId and need to append its contents to their partial tree later
+      callDataTree = newMerkleTree;
+      currentState = newState;
       txIdAfterFraudulentTxId = receipt.transactionHash;
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
-
-      // expect(receipt.gasUsed).to.equal(46154);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
 
       expect(logs[0].event).to.equal('New_Optimistic_State');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(38164);
     });
 
     it("allows a user (accuser) to lock a suspect's account for a time frame.", async () => {
@@ -534,14 +535,11 @@ contract.only("Optimistic Roll In", accounts => {
       const { receipt, logs } = await contractInstance.lock_user(suspect, { value: accuserBondAmount, from: accuser });
 
       const block = await web3.eth.getBlock(receipt.blockNumber);
-
       const balance = await contractInstance.balances(accuser);
       const suspectLocker = await contractInstance.lockers(suspect);
       const suspectLockedTime = await contractInstance.locked_times(suspect);
       const accuserLocker = await contractInstance.lockers(accuser);
       const accuserLockedTime = await contractInstance.locked_times(accuser);
-
-      // expect(receipt.gasUsed).to.equal(127825);
 
       expect(logs[0].event).to.equal('Locked');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -553,66 +551,77 @@ contract.only("Optimistic Roll In", accounts => {
       expect(suspectLockedTime.toString()).to.equal(block.timestamp.toString());
       expect(accuserLocker).to.equal(accuser);
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
+
+      expect(receipt.gasUsed).to.equal(128045);
     });
 
     it("allows a user (accuser) to update their local partial tree with the suspect's pre-lockout valid transition.", async () => {
-      const fnDecoder = new txDecoder.FunctionDecoder(contractABI);
+      const optimismDecoder = new txDecoder.FunctionDecoder(optimismABI);
+      const logicDecoder = new txDecoder.FunctionDecoder(logicABI);
       
       // Pull the transaction that occurred after the suspected fraudulent transition
       const txAfterFraudulentTx = await web3.eth.getTransaction(txIdAfterFraudulentTxId);
-      const decodedValidData = fnDecoder.decodeFn(txAfterFraudulentTx.input);
+      const decodedOptimismData = optimismDecoder.decodeFn(txAfterFraudulentTx.input);
 
-      // Decode the input data (calldata) to unpack just the arg and state
-      // We need these since appending them respectively to each partial tree, that were' going to build, will result in trees
-      // that match what is current on chain for the suspect (since we haven't)
+      // Pull the transaction receipt containing the suspected fraudulent transition's logs, and last time
+      const receiptAfterFraudulentTx = await web3.eth.getTransactionReceipt(txIdAfterFraudulentTxId);
+      const lastTimeHex = receiptAfterFraudulentTx.logs[0].topics[2];
+
+      // Decode the optimism input data
       const {
-        arg: argHex,
+        sighash: optimismSig,
+        call_data: callDataHex,
         new_state: newStateHex,
-      } = decodedValidData;
+        call_data_root: callDataRootHex,
+        proof: proofHex,
+        last_time: lastTime,
+      } = decodedOptimismData;
 
       // Convert the hex strings to Buffers
-      const arg = Buffer.from(argHex.slice(2), 'hex');
+      const callData = Buffer.from(callDataHex.slice(2), 'hex');
       const newState = Buffer.from(newStateHex.slice(2), 'hex');
+      const callDataRoot = Buffer.from(callDataRootHex.slice(2), 'hex');
 
-      // Append the new state to the locally maintained states partial tree
-      statesPartialTree = statesPartialTree.append(newState);
+      // Expect the call data root provided to match that of the local partial tree maintained
+      expect(callDataRoot.equals(callDataPartialTree.root)).to.be.true;
 
-      // Append the new state to the locally maintained args partial tree
-      argsPartialTree = argsPartialTree.append(arg);
+      // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
+      const { current_state: startingStateHex, arg: argHex } = logicDecoder.decodeFn(callDataHex);
+      const startingState = Buffer.from(startingStateHex.slice(2), 'hex');
+      const arg = Buffer.from(argHex.slice(2), 'hex');
+      const endState = getNewState(startingState, arg);
+
+      // Given this test story, we know this transition is valid
+      expect(endState.equals(newState)).to.be.true;
+
+      // Append the new call data to the locally maintained call data partial tree
+      callDataPartialTree = callDataPartialTree.append(callData);
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
+      const expectedAccountState = hashPacked([callDataPartialTree.root, newState, Buffer.from(lastTimeHex.slice(2), 'hex')]);
 
       // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
     });
 
     it("allows a user (accuser) to prove a suspect's fraud (from a partial tree).", async () => {
-      const transitionIndex = fraudulentTransitionIndex;
-      const statesRootHex = '0x' + statesPartialTree.root.toString('hex');
-      const argsRootHex = '0x' + argsPartialTree.root.toString('hex');
       const proofOptions = { compact: true };
 
-      // Build a Single Proof for the arg that was used in this invalid state transition
-      const { element: arg, compactProof: argSingleProof } = argsPartialTree.generateSingleProof(transitionIndex, proofOptions);
-      const argHex = '0x' + arg.toString('hex');
-      const argSingleProofHex = argSingleProof.map(p => '0x' + p.toString('hex'));
-      
-      // Build a Multi Proof for the current and new state that was provided in this invalid state transition
-      const { elements: states, compactProof: statesMultiProof } = statesPartialTree.generateMultiProof([transitionIndex, transitionIndex + 1], proofOptions);
-      const statesHex = states.map(s => '0x' + s.toString('hex'));
-      const statesMultiProofHex = statesMultiProof.map(p => '0x' + p.toString('hex'));
+      // Build a Multi Proof for the call data of the fraudulent transition
+      const indices = [fraudulentTransitionIndex, fraudulentTransitionIndex + 1];
+      const { root, elements, compactProof } = callDataPartialTree.generateMultiProof(indices, proofOptions);
+      const callDataArrayHex = elements.map(c => '0x' + c.toString('hex'));
+      const proofHex = compactProof.map(p => '0x' + p.toString('hex'));
+      const stateHex = '0x' + currentState.toString('hex');
+      const callDataRootHex = '0x' + root.toString('hex');
       
       // Prove the fraud
       const { receipt, logs } = await contractInstance.prove_fraud(
         suspect,
-        transitionIndex,
-        argHex,
-        statesHex,
-        argsRootHex,
-        argSingleProofHex,
-        statesRootHex,
-        statesMultiProofHex,
+        callDataArrayHex,
+        stateHex,
+        callDataRootHex,
+        proofHex,
         lastTime,
         { from: accuser }
       );
@@ -627,24 +636,23 @@ contract.only("Optimistic Roll In", accounts => {
       const accuserLockedTime = await contractInstance.locked_times(accuser);
 
       const expectedAccuserBalance = web3.utils.toBN(bondAmount).add(web3.utils.toBN(accuserBondAmount)).toString();
-      rollbackSize = (transitionIndex + 1).toString();
-
-      // expect(receipt.gasUsed).to.equal(283352);
 
       expect(logs[0].event).to.equal('Fraud_Proven');
       expect(logs[0].args[0]).to.equal(accuser);
       expect(logs[0].args[1]).to.equal(suspect);
-      expect(logs[0].args[2].toString()).to.equal(transitionIndex.toString());
+      expect(logs[0].args[2].toString()).to.equal(fraudulentTransitionIndex.toString());
       expect(logs[0].args[3].toString()).to.equal(bondAmount);
 
       expect(suspectBalance.toString()).to.equal('0');
       expect(suspectLocker).to.equal(suspect);
       expect(suspectLockedTime.toString()).to.equal('0');
-      expect(suspectRollbackSize.toString()).to.equal(rollbackSize);
+      expect(suspectRollbackSize.toString()).to.equal(fraudulentTransitionIndex.toString());
 
       expect(accuserBalance.toString()).to.equal(expectedAccuserBalance);
       expect(accuserLocker).to.equal(zeroAddress);
       expect(accuserLockedTime.toString()).to.equal('0');
+
+      expect(receipt.gasUsed).to.equal(298471);
     });
 
     it("allows a user (accuser) to withdraw their balance (including thee reward).", async () => {
@@ -652,79 +660,65 @@ contract.only("Optimistic Roll In", accounts => {
       const balanceUser0 = await contractInstance.balances(suspect);
       const balanceUser1 = await contractInstance.balances(accuser);
 
-      // expect(receipt.gasUsed).to.equal(21002);
+      expect(receipt.gasUsed).to.equal(21080);
       expect(balanceUser0.toString()).to.equal('0');
       expect(balanceUser1.toString()).to.equal('0');
     });
   
-    it("allows a user (suspect) to rollback their args tree and states tree.", async () => {
-      const statesRootHex = '0x' + statesTree.root.toString('hex');
-      const argsRootHex = '0x' + argsTree.root.toString('hex');
+    it("allows a user (suspect) to rollback their call data tree.", async () => {
+      const currentStateHex = '0x' + currentState.toString('hex');
       const proofOptions = { compact: true };
       
-      // Suspect needs to create an args Merkle Tree of all pre-invalid-transition args
+      // Suspect needs to create a call data Merkle Tree of all pre-invalid-transition call data
       // Note: rollbackSize is a bad name. Its really the expected size of the tree after the rollback is performed
-      const oldArgs = argsTree.elements.slice(0, rollbackSize - 1);
-      const oldArgsTree = new MerkleTree(oldArgs, treeOptions);
-      const oldArgsRootHex = '0x' + oldArgsTree.root.toString('hex');
+      const oldCallData = callDataTree.elements.slice(0, fraudulentTransitionIndex);
+      const rolledBackCallDataTree = new MerkleTree(oldCallData, treeOptions);
+      const rolledBackCallDataRootHex = '0x' + rolledBackCallDataTree.root.toString('hex');
 
-      const rolledBackArgs = argsTree.elements.slice(rollbackSize - 1);
-      const rolledBackArgsHex = rolledBackArgs.map(a => '0x' + a.toString('hex'));
+      const rolledBackCallDataArray = callDataTree.elements.slice(fraudulentTransitionIndex);
+      const rolledBackCallDataArrayHex = rolledBackCallDataArray.map(c => '0x' + c.toString('hex'));
 
-      // Suspect needs to build an Append Proof to prove to the contract that the old args root, when appended with the rolled back args,
-      // has the root that equals the root of current on-chain args tree
-      const { proof: argProof } = oldArgsTree.appendMulti(rolledBackArgs, proofOptions);
-      const { compactProof: argAppendProof } = argProof;
-      const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
+      // Suspect needs to build an Append Proof to prove that the old call data root, when appended with the rolled call data,
+      // has the root that equals the root of current on-chain call data tree
+      const { proof } = rolledBackCallDataTree.appendMulti(rolledBackCallDataArray, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const rollBackProofHex = appendProof.map(p => '0x' + p.toString('hex'));
 
-      // Suspect needs to create a states Merkle Tree of all pre-invalid-transition states
-      // Note: rollbackSize is a bad name. Its really the expected size of the tree after the rollback is performed
-      const oldStates = statesTree.elements.slice(0, rollbackSize);
-      const oldStatesTree = new MerkleTree(oldStates, treeOptions);
-      const oldStatesRootHex = '0x' + oldStatesTree.root.toString('hex');
-
-      const rolledBackStates = statesTree.elements.slice(rollbackSize);
-      const rolledBackStatesHex = rolledBackStates.map(s => '0x' + s.toString('hex'));
-
-      // Suspect needs to build an Append Proof to prove to the contract that the old states root, when appended with the rolled back states,
-      // has the root that equals the root of current on-chain states tree
-      const { proof: statesProof } = oldStatesTree.appendMulti(rolledBackStates, proofOptions);
-      const { compactProof: statesAppendProof } = statesProof;
-      const statesAppendProofHex = statesAppendProof.map(p => '0x' + p.toString('hex'));
+      // Suspect needs to prove to the current size of the on-chain call data tree
+      const { root, elementCount: currentSize, elementRoot: sizeProof } = callDataTree.generateSizeProof({ simple: true });
+      const callDataRootHex = '0x' + root.toString('hex');
+      const currentSizeProofHex = '0x' + sizeProof.toString('hex');
 
       // Suspect performs the rollback while bonding new coin at the same time
       const { receipt, logs } = await contractInstance.rollback(
-        oldArgsRootHex,
-        oldStatesRootHex,
-        rolledBackArgsHex,
-        rolledBackStatesHex,
-        argsRootHex,
-        argAppendProofHex,
-        statesRootHex,
-        statesAppendProofHex,
+        rolledBackCallDataRootHex,
+        rolledBackCallDataArrayHex,
+        rollBackProofHex,
+        currentSize,
+        currentSizeProofHex,
+        callDataRootHex,
+        currentStateHex,
         lastTime,
         { value: bondAmount, from: suspect }
       );
 
+      // Since the transaction executed successfully, update the locally maintained variables
       const block = await web3.eth.getBlock(receipt.blockNumber);
       lastTime = block.timestamp;
-      
-      // Since the rollback transaction was successful, update the locally maintained states and args trees
-      statesTree = oldStatesTree;
-      argsTree = oldArgsTree;
-      
+      callDataTree = rolledBackCallDataTree;
+      currentState = rolledBackCallDataArray[0].slice(4, 36);
+      fraudulentTransitionIndex = null;
+
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
+
       const suspectBalance = await contractInstance.balances(suspect);
       const suspectLocker = await contractInstance.lockers(suspect);
       const suspectRollbackSize = await contractInstance.rollback_sizes(suspect);
 
-      const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
-
-      // expect(receipt.gasUsed).to.equal(250397);
-
       expect(logs[0].event).to.equal('Rolled_Back');
       expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(fraudulentTransitionIndex.toString());
+      expect(logs[0].args[1].toString()).to.equal(callDataTree.elements.length.toString());
       expect(logs[0].args[2].toString()).to.equal(lastTime.toString());
 
       expect(suspectBalance.toString()).to.equal(bondAmount);
@@ -732,124 +726,170 @@ contract.only("Optimistic Roll In", accounts => {
       expect(suspectRollbackSize.toString()).to.equal('0');
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(246897);
     });
 
     it("allows a user (suspect) to re-perform valid optimistic state transitions in batch.", async () => {
       const transitions = 100;
-      const args = generateElements(transitions, { seed: '66' });
+      const args = generateElements(transitions, { seed: '88' });
       const argsHex = args.map(a => '0x' + a.toString('hex'));
-      const transitionIndex = statesTree.elements.length - 1;
-      const currentState = statesTree.elements[transitionIndex];
-      const currentStateHex = '0x' + currentState.toString('hex');
-      const statesRootHex = '0x' + statesTree.root.toString('hex');
-      const argsRootHex = '0x' + argsTree.root.toString('hex');
       const proofOptions = { compact: true };
 
       // Compute the new states from the current state (which is the last state) and the args
-      const newStates = [];
+      const callDataArray = [];
+      let interimState = currentState;
       
       for (let i = 0; i < transitions; i++) {
-        const newState = i === 0
-          ? getNewState(currentState, args[i])
-          : getNewState(newStates[i - 1], args[i]);
+        const interimStateHex = '0x' + interimState.toString('hex');
 
-        newStates.push(newState);
+        // Get the call data from a logic request
+        const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
+          interimStateHex,
+          argsHex[i],
+          { from: suspect }
+        );
+        
+        // Append call data to array, and update interim state
+        const callData = Buffer.from(callDataHex.slice(2), 'hex');
+        callDataArray.push(callData);
+        interimState = getNewState(interimState, args[i]);
       }
-      
-      const newStatesHex = newStates.map(s => '0x' + s.toString('hex'));
-      
-      // Build the Single Proof, to prove the existence of the last state, that also enables the appending of several new states to the states tree
-      const { proof: stateProof, newMerkleTree: newStatesTree } = statesTree.useAndAppend(transitionIndex, newStates, proofOptions);
-      const { compactProof: stateMultiProof } = stateProof;
-      const stateMultiProofHex = stateMultiProof.map(p => '0x' + p.toString('hex'));
 
-      const { proof: argProof, newMerkleTree: newArgsTree } = argsTree.appendMulti(args, proofOptions);
-      const { compactProof: argAppendProof } = argProof;
-      const argAppendProofHex = argAppendProof.map(p => '0x' + p.toString('hex'));
+      const callDataArrayHex = callDataArray.map(c => '0x' + c.toString('hex'));
+      const newStateHex = '0x' + interimState.toString('hex');
+      const callDataRootHex = '0x' + callDataTree.root.toString('hex');
 
-      // Build an Append Proof that enables appending new args to the args tree
+      // Build an Append Proof that enables appending new call data to the call data tree
+      const { proof, newMerkleTree } = callDataTree.appendMulti(callDataArray, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
+
       const { receipt, logs } = await contractInstance.perform_many_optimistically(
-        transitionIndex,
-        currentStateHex,
-        argsHex,
-        newStatesHex,
-        argsRootHex,
-        argAppendProofHex,
-        statesRootHex,
-        stateMultiProofHex,
+        callDataArrayHex,
+        newStateHex,
+        callDataRootHex,
+        proofHex,
         lastTime,
         { from: suspect }
       );
 
+      // Since the transaction executed successfully, update the locally maintained variables
       const block = await web3.eth.getBlock(receipt.blockNumber);
       lastTime = block.timestamp;
-      
-      // Since the transaction executed successfully, update the locally maintained merkle trees
-      statesTree = newStatesTree;
-      argsTree = newArgsTree;
+      callDataTree = newMerkleTree;
+      currentState = interimState;
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([statesTree.root, argsTree.root, to32ByteBuffer(lastTime)]);
-
-      // expect(receipt.gasUsed).to.equal(296473);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
 
       expect(logs[0].event).to.equal('New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
+      expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(290306);
     });
 
-    it("allows a user to perform a normal state transition (and exit optimism).", async () => {
-      const arg = generateElements(1, { seed: '99' })[0];
-      const argHex = '0x' + arg.toString('hex');
-      const transitionIndex = statesTree.elements.length - 1;
-      currentState = statesTree.elements[transitionIndex];
-      const currentStateHex = '0x' + currentState.toString('hex');
-      const statesRootHex = '0x' + statesTree.root.toString('hex');
-      const argsRootHex = '0x' + argsTree.root.toString('hex');
-      const proofOptions = { compact: true };
-
-      // Build the Single Proof, to prove the existence of the last state, that also enables the appending of a new state to the states tree
-      const stateProof = statesTree.generateSingleProof(transitionIndex, proofOptions);
-      const { compactProof: stateSingleProof } = stateProof;
-      const stateSingleProofHex = stateSingleProof.map(p => '0x' + p.toString('hex'));
-
+    it("allows a user (suspect) to perform a normal state transition (and exit optimism).", async () => {
       // Need to increase time by at least 600 seconds for this to be allowed
       await advanceTime(lastTime + 700);
-
-      const { receipt, logs } = await contractInstance.perform_and_exit(
-        transitionIndex,
+      
+      const arg = generateElements(1, { seed: '99' })[0];
+      const argHex = '0x' + arg.toString('hex');
+      const currentStateHex = '0x' + currentState.toString('hex');
+      
+      // Get the call logic contract address and call data from a logic request
+      const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
         currentStateHex,
         argHex,
-        argsRootHex,
-        statesRootHex,
-        stateSingleProofHex,
+        { from: suspect }
+      );
+
+      const callDataRootHex = '0x' + callDataTree.root.toString('hex');
+
+      const { receipt, logs } = await contractInstance.perform_and_exit(
+        callDataHex,
+        callDataRootHex,
         lastTime,
         { from: suspect }
       );
 
-      // Compute the new state from the current state (which is the last state) and the arg
-      const expectedNewState = getNewState(currentState, arg);
-      const expectedNewStateHex = expectedNewState.toString('hex');
-      
-      // Since the transaction executed successfully, update the locally maintained merkle trees and last time
+      // Since the transaction executed successfully, update the locally maintained variables
       lastTime = 0;
-      statesTree = null;
-      argsTree = null;
-
-      // Get the new state from the event, since its needed for subsequent performs
-      currentState = Buffer.from(logs[0].args[1].slice(2), 'hex');
+      callDataTree = new MerkleTree([], treeOptions);
+      currentState = getNewState(currentState, arg);
 
       const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([currentState, to32ByteBuffer(0), to32ByteBuffer(0)]);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
+      const expectedAccountStateHex = '0x' + expectedAccountState.toString('hex');
 
-      // expect(receipt.gasUsed).to.equal(274798);
+      expect(accountState).to.equal(expectedAccountStateHex);
 
-      expect(logs[0].event).to.equal('New_State');
+      expect(logs[0].event).to.equal('Exited_Optimism');
       expect(logs[0].args[0]).to.equal(suspect);
-      expect(currentState.toString('hex')).to.equal(expectedNewStateHex);
+
+      expect(receipt.gasUsed).to.equal(289468);
+    });
+
+    it("allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).", async () => {
+      const transitions = 100;
+      const args = generateElements(transitions, { seed: 'aa' });
+      const argsHex = args.map(a => '0x' + a.toString('hex'));
+      const proofOptions = { compact: true };
+
+      // Compute the new states from the current state (which is the last state) and the args
+      const callDataArray = [];
+      let interimState = currentState;
+      
+      for (let i = 0; i < transitions; i++) {
+        const interimStateHex = '0x' + interimState.toString('hex');
+
+        // Get the call data from a logic request
+        const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
+          interimStateHex,
+          argsHex[i],
+          { from: suspect }
+        );
+        
+        // Append call data to array, and update interim state
+        const callData = Buffer.from(callDataHex.slice(2), 'hex');
+        callDataArray.push(callData);
+        interimState = getNewState(interimState, args[i]);
+      }
+
+      const callDataArrayHex = callDataArray.map(c => '0x' + c.toString('hex'));
+      const newStateHex = '0x' + interimState.toString('hex');
+
+      // Build an Append Proof that enables appending new call data to the call data tree
+      const { proof, newMerkleTree } = callDataTree.appendMulti(callDataArray, proofOptions);
+      const { compactProof: appendProof } = proof;
+      const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
+
+      const { receipt, logs } = await contractInstance.perform_many_optimistically_and_enter(
+        callDataArrayHex,
+        newStateHex,
+        proofHex,
+        { from: suspect }
+      );
+
+      // Since the transaction executed successfully, update the locally maintained variables
+      const block = await web3.eth.getBlock(receipt.blockNumber);
+      lastTime = block.timestamp;
+      callDataTree = newMerkleTree;
+      currentState = interimState;
+
+      const accountState = await contractInstance.account_states(suspect);
+      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
+
+      expect(logs[0].event).to.equal('New_Optimistic_States');
+      expect(logs[0].args[0]).to.equal(suspect);
+      expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(261585);
     });
   });
 });

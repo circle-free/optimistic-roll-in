@@ -1,7 +1,7 @@
 {
   "name": "optimistic-roll-in",
   "version": "0.0.1",
-  "description": "An Optimistic Roll-In Proof of Concept.",
+  "description": "Layer-Agnostic Optimistic Roll-Ins - A Proof of Concept.",
   "main": "/js/src/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
