@@ -5,15 +5,21 @@ const crypto = require('crypto');
 const { MerkleTree, PartialMerkleTree } = require('merkle-trees/js');
 const txDecoder = require('ethereum-tx-decoder');
 const { abi: optimismABI } = require('../build/contracts/Optimistic_Roll_In.json');
-const { abi: logicABI } = require('../build/contracts/Some_Logic_Contract.json');
+const { abi: gameABI } = require('../build/contracts/Game_Collectibles.json');
 
 const OptimisticRollIn = artifacts.require("Optimistic_Roll_In");
-const SomeLogicContract = artifacts.require("Some_Logic_Contract");
+const GameCollectibles = artifacts.require("Game_Collectibles");
 
-const treeOptions = {
+const optimisticTreeOptions = {
   unbalanced: true,
   sortedHash: false,
   elementPrefix: '00',
+};
+
+const gameTreeOptions = {
+  unbalanced: true,
+  sortedHash: false,
+  elementPrefix: '0000000000000000000000000000000000000000000000000000000000000000',
 };
 
 const leftPad = (num, size, char = '0') => {
@@ -52,13 +58,7 @@ const generateElements = (elementCount, options = {}) => {
 };
 
 const getNewState = (currentState, arg) => {
-  let newState = currentState;
-
-  for (let i= 0; i < 1000; i++) {
-    newState = hashNode(newState, arg);
-  }
-
-  return newState;
+  throw Error('Not Implemented');
 };
 
 const advanceTime = (time) => {
@@ -76,18 +76,19 @@ const advanceTime = (time) => {
   });
 }
 
-const initialStateSelector = '0x1e58e625';
 const zeroAddress = '0x0000000000000000000000000000000000000000';
 
-contract.only("Optimistic Roll In", accounts => {
+contract("Game Collectibles", accounts => {
   describe("Basic Testing (must be performed in order)", async () => {
-    let suspect = accounts[0];
-    let accuser = accounts[1];
+    let user = accounts[0];
+    let gameContractInstance = null;
+    let gameAddress = null;
+    let optimismContractInstance = null;
+    let userBondAmount = null;
 
-    let logicContractInstance = null;
-    let logicAddress = null;
-    let contractInstance = null;
-    let bondAmount = null;
+
+
+    let prover = accounts[1];
     let callDataTree = null;
     let currentState = null;
     let lastTime = null;
@@ -95,49 +96,25 @@ contract.only("Optimistic Roll In", accounts => {
     let fraudulentTxId = null;
     let callDataPartialTree = null;
     let txIdAfterFraudulentTxId = null;
-    let accuserBondAmount = null;
-
-    // The Story
-    //  - A user will bond and initialize their account
-    //  - This user will perform 1 non-optimistic (on-chain computed) state transition (and remain outside of optimism)
-    //  - This user will perform 1 valid optimistic state transition to enter optimistic state
-    //  - This user will perform 1 valid optimistic state transition
-    //  - This user will perform 100 valid optimistic state transitions in batch (1 transaction)
-    //  - This user (hereby called the suspect) will perform another 100 optimistic state transitions in batch, but inject an invalid transition somewhere in there
-    //  - Another user (hereby called the accuser) will be able to detect the fraudulent transition in that transaction
-    //  - The accuser uses just the fraudulent transaction's data to build a Partial Merkle Tree that can be used to create a fraud proof
-    //  - The accuser need to lock the suspect's account for long enough that a fraud proof can be built without the suspect's account roots changing on-chain
-    //  - Before the accuser can lock the suspect's account, the suspect performs another valid state transition
-    //  - The accuser finally locks the suspect's account, and, to discourage a DOS, the accuser also bond's themselves
-    //  - The accuser is able to update their Partial Merkle Tree with the transition data in the suspect's last transaction
-    //  - The accuser uses the Partial Merkle Tree to build a fraud proof to demonstrate the exact transition that was fraudulent
-    //  - The suspect is further locked from making transitions until they roll back their account roots
-    //  - The contract is therefore aware of the expected post-roll-back size of their call data tree
-    //  - The accuser is rewarded with the suspect's bond for having proven all of this
-    //  - The accuser withdraws their account balance, which is their original bond, plus their reward (the suspect's original bond)
-    //  - The suspect constructs a new call data Merkle Tree of the expected size, and proves to the contract that it's valid prior version of the call data tree (Rollback Proof)
-    //  - The suspect also re-bonds themselves at the same time as the rollback
-    //  - The suspect (now a normal user) carries on to perform 100 valid optimistic state transitions in batch
-    //  - This user will perform 1 non-optimistic (on-chain computed) state transition to exit optimism
-    //  - This user will perform 50 optimistic valid optimistic state transitions in batch to reenter optimism
+    let proverBondAmount = null;
 
     before(async () => {
-      logicContractInstance = await SomeLogicContract.new();
-      logicAddress = logicContractInstance.address;
-      contractInstance = await OptimisticRollIn.new(logicAddress, initialStateSelector);
+      gameContractInstance = await GameCollectibles.new();
+      gameAddress = gameContractInstance.address;
+      optimismContractInstance = await OptimisticRollIn.new(gameAddress);
     });
 
-    it("can bond a user (who will eventually be the guilty suspect).", async () => {
-      bondAmount = '1000000000000000000';
-      const { receipt, logs } = await contractInstance.bond(suspect, { value: bondAmount, from: suspect });
-      const balance = await contractInstance.balances(suspect);
+    it("can bond a user.", async () => {
+      userBondAmount = '1000000000000000000';
+      const { receipt, logs } = await optimismContractInstance.bond(user, { value: userBondAmount, from: user });
+      const balance = await optimismContractInstance.balances(user);
 
-      expect(balance.toString()).to.equal(bondAmount);
-      expect(receipt.gasUsed).to.equal(42706);
+      expect(balance.toString()).to.equal(userBondAmount);
+      expect(receipt.gasUsed).to.equal(42728);
     });
 
-    it("can initialize a user (suspect).", async () => {
-      // When initialized, the suspect's account state will be an initial state, empty call data tree, and the last optimistic time will be 0
+    it("can initialize a user.", async () => {
+      // When initialized, the suspect's account state will be an initial state, call data tree, and the last optimistic time will be 0
       const { receipt, logs } = await contractInstance.initialize({ from: suspect });
       callDataTree = new MerkleTree([], treeOptions);
       currentState = to32ByteBuffer(0);
@@ -148,12 +125,7 @@ contract.only("Optimistic Roll In", accounts => {
       const expectedAccountStateHex = '0x' + expectedAccountState.toString('hex');
 
       expect(accountState).to.equal(expectedAccountStateHex);
-
-      expect(logs[0].event).to.equal('Initialized');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal('0x' + currentState.toString('hex'));
-      expect(receipt.gasUsed).to.equal(46492);
-
+      expect(receipt.gasUsed).to.equal(43423);
     });
 
     it("allows a user (suspect) to perform a normal state transition (and remain outside of optimism).", async () => {
@@ -230,7 +202,7 @@ contract.only("Optimistic Roll In", accounts => {
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(33886);
+      expect(receipt.gasUsed).to.equal(33908);
     });
 
     it("allows a user (suspect) to perform a valid optimistic state transition.", async () => {
@@ -283,7 +255,7 @@ contract.only("Optimistic Roll In", accounts => {
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(35730);
+      expect(receipt.gasUsed).to.equal(35707);
     });
 
     it("allows a user (suspect) to perform valid optimistic state transitions in batch.", async () => {
@@ -345,7 +317,7 @@ contract.only("Optimistic Roll In", accounts => {
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(286126);
+      expect(receipt.gasUsed).to.equal(286083);
     });
 
     it("allows a user (suspect) to perform fraudulent optimistic state transitions in batch.", async () => {
@@ -414,7 +386,7 @@ contract.only("Optimistic Roll In", accounts => {
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(289085);
+      expect(receipt.gasUsed).to.equal(289042);
     });
 
     it("allows a user (accuser) to immediately detect a transaction containing a fraudulent state transition.", async () => {
@@ -531,7 +503,7 @@ contract.only("Optimistic Roll In", accounts => {
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(38187);
+      expect(receipt.gasUsed).to.equal(38164);
     });
 
     it("allows a user (accuser) to lock a suspect's account for a time frame.", async () => {
@@ -557,7 +529,7 @@ contract.only("Optimistic Roll In", accounts => {
       expect(accuserLocker).to.equal(accuser);
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
 
-      expect(receipt.gasUsed).to.equal(128023);
+      expect(receipt.gasUsed).to.equal(128045);
     });
 
     it("allows a user (accuser) to update their local partial tree with the suspect's pre-lockout valid transition.", async () => {
@@ -660,12 +632,12 @@ contract.only("Optimistic Roll In", accounts => {
       expect(receipt.gasUsed).to.equal(298471);
     });
 
-    it("allows a user (accuser) to withdraw their balance (including the reward).", async () => {
+    it("allows a user (accuser) to withdraw their balance (including thee reward).", async () => {
       const { receipt } = await contractInstance.withdraw(suspect, { from: accuser });
       const balanceUser0 = await contractInstance.balances(suspect);
       const balanceUser1 = await contractInstance.balances(accuser);
 
-      expect(receipt.gasUsed).to.equal(21058);
+      expect(receipt.gasUsed).to.equal(21080);
       expect(balanceUser0.toString()).to.equal('0');
       expect(balanceUser1.toString()).to.equal('0');
     });
@@ -794,7 +766,7 @@ contract.only("Optimistic Roll In", accounts => {
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(290349);
+      expect(receipt.gasUsed).to.equal(290306);
     });
 
     it("allows a user (suspect) to perform a normal state transition (and exit optimism).", async () => {
@@ -835,7 +807,7 @@ contract.only("Optimistic Roll In", accounts => {
       expect(logs[0].event).to.equal('Exited_Optimism');
       expect(logs[0].args[0]).to.equal(suspect);
 
-      expect(receipt.gasUsed).to.equal(289446);
+      expect(receipt.gasUsed).to.equal(289468);
     });
 
     it("allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).", async () => {
@@ -894,7 +866,7 @@ contract.only("Optimistic Roll In", accounts => {
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(261608);
+      expect(receipt.gasUsed).to.equal(261585);
     });
   });
 });

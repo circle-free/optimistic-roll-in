@@ -6,7 +6,10 @@ pragma experimental ABIEncoderV2;
 import "../node_modules/merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-library.sol";
 import "./some-logic-contract.sol";
 
+// TODO: perhaps a owner-controlled sighash whitelist for optimistically performing, and therefore a non-performing exit method
+
 contract Optimistic_Roll_In {
+  event Initialized(address indexed user, bytes32 indexed initial_state);
   event New_Optimistic_State(address indexed user, uint256 indexed block_time);
   event New_Optimistic_States(address indexed user, uint256 indexed block_time);
   event Locked(address indexed suspect, address indexed accuser);
@@ -21,6 +24,7 @@ contract Optimistic_Roll_In {
   event Exited_Optimism(address indexed user);
 
   address public immutable logic_address;
+  bytes4 public immutable initializer;
 
   mapping(address => uint256) public balances;
   mapping(address => bytes32) public account_states;
@@ -28,8 +32,9 @@ contract Optimistic_Roll_In {
   mapping(address => uint256) public locked_times;
   mapping(address => uint256) public rollback_sizes;
 
-  constructor(address _logic_address) {
+  constructor(address _logic_address, bytes4 _initializer) {
     logic_address = _logic_address;
+    initializer = _initializer;   //1e58e625
   }
 
   receive() external payable {
@@ -56,8 +61,16 @@ contract Optimistic_Roll_In {
 
     require(account_states[user] == bytes32(0), "ALREADY_INITIALIZED");
 
-    // Set account state to combination of empty call data tree, zero current state (S_0), and last time of 0 (not in optimism)
-    account_states[user] = keccak256(abi.encodePacked(bytes32(0), bytes32(0), bytes32(0)));
+    (bool success, bytes memory return_bytes) = logic_address.call{ value: msg.value }(abi.encodePacked(initializer));
+    require(success, "INITIALIZE_FAILED");
+
+    // Decode initial state (S_0) from returned bytes
+    bytes32 initial_state = abi.decode(return_bytes, (bytes32));
+
+    // Set account state to combination of empty call data tree, initial state (S_0), and last time of 0 (not in optimism)
+    account_states[user] = keccak256(abi.encodePacked(bytes32(0), initial_state, bytes32(0)));
+
+    emit Initialized(user, initial_state);
   }
 
   // Allows unbonding of ETH if account not locked
