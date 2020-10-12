@@ -79,7 +79,7 @@ const advanceTime = (time) => {
 const initialStateSelector = '0x1e58e625';
 const zeroAddress = '0x0000000000000000000000000000000000000000';
 
-contract.only("Optimistic Roll In", accounts => {
+contract("Optimistic Roll In", accounts => {
   describe("Basic Testing (must be performed in order)", async () => {
     let suspect = accounts[0];
     let accuser = accounts[1];
@@ -152,8 +152,8 @@ contract.only("Optimistic Roll In", accounts => {
       expect(logs[0].event).to.equal('Initialized');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal('0x' + currentState.toString('hex'));
-      expect(receipt.gasUsed).to.equal(46492);
 
+      expect(receipt.gasUsed).to.equal(46492);
     });
 
     it("allows a user (suspect) to perform a normal state transition (and remain outside of optimism).", async () => {

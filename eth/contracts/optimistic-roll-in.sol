@@ -34,7 +34,7 @@ contract Optimistic_Roll_In {
 
   constructor(address _logic_address, bytes4 _initializer) {
     logic_address = _logic_address;
-    initializer = _initializer;   //1e58e625
+    initializer = _initializer; //1e58e625
   }
 
   receive() external payable {

@@ -38,27 +38,90 @@ const hashPacked = (buffers) => hash(Buffer.concat(buffers));
 
 const hashNode = (a, b) => hash(Buffer.concat([a, b]));
 
-const generateRandomElement = () => {
-  return crypto.randomBytes(32);
+const initialStateSelector = '0x1e58e625';
+const zeroAddress = '0x0000000000000000000000000000000000000000';
+const costPerPack = 1000000000000;
+const cardsPerPack = 10;
+const packsPurchasedEvent = '0x9146894c2ac6edd4e5aab8e0504cd0955e0937f8e8add1ab48c8c47d6c7d50c4';
+
+const getStateFromTrees = (packsTree, cardsTree) => {
+  return hashPacked([packsTree.root, cardsTree.root]);
 };
 
-const generateElements = (elementCount, options = {}) => {
-  const { seed, random = false } = options;
-  const elements = [];
-  let seedBuffer = seed ? Buffer.from(seed, 'hex') : null;
-  let element = seedBuffer;
+const buyPacksTransition = async (packsTree, cardsTree, packCount, gameContractInstance, user) => {
+  const proofOptions = { compact: true };
+  const currentState = getStateFromTrees(packsTree, cardsTree);
+  const currentStateHex = '0x' + currentState.toString('hex');
+  const packsRootHex = '0x' + packsTree.root.toString('hex');
+  const cardsRootHex = '0x' + cardsTree.root.toString('hex');
+  
+  const { compactProof: packAppendProof } = packsTree.generateAppendProof(proofOptions);
+  const packAppendProofHex = packAppendProof.map(p => '0x' + p.toString('hex'));
 
-  for (let i = 0; i < elementCount; i++) {
-    element = random ? generateRandomElement() : seed ? hashNode(seedBuffer, element) : to32ByteBuffer(i);
-    seedBuffer = seed ? element : seedBuffer;
-    elements.push(element);
-  }
+  // Get the call logic contract address and call data from a logic request
+  const cost = costPerPack * packCount;
+  const { data: callDataHex } = await gameContractInstance.buy_packs.request(
+    currentStateHex,
+    packCount,
+    packsRootHex,
+    packAppendProofHex,
+    cardsRootHex,
+    { from: user, value: cost }
+  );
 
-  return elements;
+  const newValues = (blockTime) => {
+    const packs = Array(packCount).fill(null).map((_, i) => {
+      return hashPacked([currentState, to32ByteBuffer(i), to32ByteBuffer(blockTime)]);
+    });
+    
+    const { newMerkleTree: newPacksTree } = packsTree.appendMulti(packs);
+    const newState = getStateFromTrees(newPacksTree, cardsTree);
+
+    return { packsTree: newPacksTree, cardsTree, newState };
+  };
+  
+  return { callDataHex, cost, newValues };
 };
 
-const getNewState = (currentState, arg) => {
-  throw Error('Not Implemented');
+const openPackTransition = async (packsTree, cardsTree, packIndex, gameContractInstance, user) => {
+  const proofOptions = { compact: true };
+  const currentState = getStateFromTrees(packsTree, cardsTree);
+  const currentStateHex = '0x' + currentState.toString('hex');
+
+  const { proof: packsUpdateProof, newMerkleTree: newPacksTree } = packsTree.updateSingle(packIndex, to32ByteBuffer(0), proofOptions);
+  const { root: packsRoot, element: pack, compactProof: packProof } = packsUpdateProof;
+  const packsRootHex = '0x' + packsRoot.toString('hex');
+  const packHex = '0x' + pack.toString('hex');
+  const packProofHex = packProof.map(p => '0x' + p.toString('hex'));
+
+  const cards = Array(cardsPerPack).fill(null).map((_, i) => {
+    return hashPacked([pack, to32ByteBuffer(i)]);
+  });
+
+  const { proof: cardsAppendProof, newMerkleTree: newCardsTree } = cardsTree.appendMulti(cards, proofOptions);
+  const { root: cardsRoot, compactProof: cardsCompactProof } = cardsAppendProof;
+  const cardsRootHex = '0x' + cardsRoot.toString('hex');
+  const cardsAppendProofHex = cardsCompactProof.map(p => '0x' + p.toString('hex'));
+
+  // Get the call logic contract address and call data from a logic request
+  const { data: callDataHex } = await gameContractInstance.open_pack.request(
+    currentStateHex,
+    packIndex,
+    packHex,
+    packsRootHex,
+    packProofHex,
+    cardsRootHex,
+    cardsAppendProofHex,
+    { from: user }
+  );
+  
+  const newValues = () => {
+    const newState = getStateFromTrees(newPacksTree, newCardsTree);
+
+    return { packsTree: newPacksTree, cardsTree: newCardsTree, newState };
+  };
+  
+  return { callDataHex, newValues };
 };
 
 const advanceTime = (time) => {
@@ -76,15 +139,15 @@ const advanceTime = (time) => {
   });
 }
 
-const zeroAddress = '0x0000000000000000000000000000000000000000';
-
-contract("Game Collectibles", accounts => {
+contract.only("Game Collectibles", accounts => {
   describe("Basic Testing (must be performed in order)", async () => {
     let user = accounts[0];
     let gameContractInstance = null;
     let gameAddress = null;
     let optimismContractInstance = null;
     let userBondAmount = null;
+    let packsTree = null;
+    let cardsTree = null;
 
 
 
@@ -101,108 +164,106 @@ contract("Game Collectibles", accounts => {
     before(async () => {
       gameContractInstance = await GameCollectibles.new();
       gameAddress = gameContractInstance.address;
-      optimismContractInstance = await OptimisticRollIn.new(gameAddress);
+      optimismContractInstance = await OptimisticRollIn.new(gameAddress, initialStateSelector);
     });
 
-    it("can bond a user.", async () => {
+    it.only("can bond a user.", async () => {
       userBondAmount = '1000000000000000000';
-      const { receipt, logs } = await optimismContractInstance.bond(user, { value: userBondAmount, from: user });
+      const { receipt, logs } = await optimismContractInstance.bond(user, { from: user, value: userBondAmount });
       const balance = await optimismContractInstance.balances(user);
 
       expect(balance.toString()).to.equal(userBondAmount);
-      expect(receipt.gasUsed).to.equal(42728);
+      expect(receipt.gasUsed).to.equal(42706);
     });
 
-    it("can initialize a user.", async () => {
-      // When initialized, the suspect's account state will be an initial state, call data tree, and the last optimistic time will be 0
-      const { receipt, logs } = await contractInstance.initialize({ from: suspect });
-      callDataTree = new MerkleTree([], treeOptions);
-      currentState = to32ByteBuffer(0);
+    it.only("can initialize a user.", async () => {
+      // When initialized, the user's account state will be an initial state, call data tree, and the last optimistic time will be 0
+      const { receipt, logs } = await optimismContractInstance.initialize({ from: user });
+      callDataTree = new MerkleTree([], optimisticTreeOptions);
+      packsTree = new MerkleTree([], gameTreeOptions);
+      cardsTree = new MerkleTree([], gameTreeOptions);
+      currentState = getStateFromTrees(packsTree, cardsTree);
       lastTime = 0; 
 
-      const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
-      const expectedAccountStateHex = '0x' + expectedAccountState.toString('hex');
+      const accountState = await optimismContractInstance.account_states(user);
+      const expectedAccountStateHex = '0x' + hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]).toString('hex');
 
       expect(accountState).to.equal(expectedAccountStateHex);
-      expect(receipt.gasUsed).to.equal(43423);
+
+      expect(logs[0].event).to.equal('Initialized');
+      expect(logs[0].args[0]).to.equal(user);
+      expect(logs[0].args[1].toString()).to.equal('0x' + currentState.toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(46492);
     });
 
-    it("allows a user (suspect) to perform a normal state transition (and remain outside of optimism).", async () => {
-      const arg = generateElements(1, { seed: '44' })[0];
-      const argHex = '0x' + arg.toString('hex');
-      const currentStateHex = '0x' + currentState.toString('hex');
+    it.only("allows a user to perform a normal state transition (and remain outside of optimism).", async () => {
+      const packCount = 5;
+      const { callDataHex, cost, newValues } = await buyPacksTransition(packsTree, cardsTree, packCount, gameContractInstance, user);
 
-      // Get the call logic contract address and call data from a logic request
-      const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
-        currentStateHex,
-        argHex,
-        { from: suspect }
-      );
-
-      const { receipt, logs } = await contractInstance.perform(
+      const { receipt, logs } = await optimismContractInstance.perform(
         callDataHex,
-        { from: suspect }
+        { from: user, value: cost }
       );
 
-      // Compute the new state from the current state (which is the last state) and the arg
-      currentState = getNewState(currentState, arg);
+      // Locally Compute the new state from the current state (which is the last state)
+      const block = await web3.eth.getBlock(receipt.blockNumber);
+      const transition = newValues(block.timestamp);
+      packsTree = transition.packsTree;
+      cardsTree = transition.cardsTree;
+      currentState = transition.newState;
 
-      const accountState = await contractInstance.account_states(suspect);
-      const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
-      const expectedAccountStateHex = '0x' + expectedAccountState.toString('hex');
+      const accountState = await optimismContractInstance.account_states(user);
+      const expectedAccountStateHex = '0x' + hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]).toString('hex');
 
       expect(accountState).to.equal(expectedAccountStateHex);
-      expect(receipt.gasUsed).to.equal(286269);
+
+      expect(receipt.rawLogs[0].topics[0]).to.equal(packsPurchasedEvent);
+      expect(receipt.rawLogs[0].topics[1]).to.equal('0x' + to32ByteBuffer(packCount).toString('hex'));
+      expect(receipt.rawLogs[0].topics[2]).to.equal('0x' + to32ByteBuffer(block.timestamp).toString('hex'));
+
+      expect(receipt.gasUsed).to.equal(46428);
     });
 
-    it("allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).", async () => {
-      const arg = generateElements(1, { seed: '55' })[0];
-      const argHex = '0x' + arg.toString('hex');
-      const currentStateHex = '0x' + currentState.toString('hex');
+    it.only("allows a user to perform a valid optimistic state transition (and enter optimism).", async () => {
       const proofOptions = { compact: true };
+      const packIndex = 0;
 
-      // Compute the new state from the current state (which is the last state) and the arg
-      const newState = getNewState(currentState, arg);
-      const newStateHex = '0x' + newState.toString('hex');
-
-      // Get the call logic contract address and call data from a logic request
-      const { data: callDataHex } = await logicContractInstance.some_pure_transition.request(
-        currentStateHex,
-        argHex,
-        { from: suspect }
-      );
-      
-      const callData = Buffer.from(callDataHex.slice(2), 'hex');
+      const { callDataHex, newValues } = await openPackTransition(packsTree, cardsTree, packIndex, gameContractInstance, user);
+      const transition = newValues();
+      const newStateHex = '0x' + transition.newState.toString('hex');
 
       // Get the expect new call data tree and append proof
+      const callData = Buffer.from(callDataHex.slice(2), 'hex');
       const { proof, newMerkleTree } = callDataTree.appendSingle(callData, proofOptions);
       const { compactProof: appendProof } = proof;
       const proofHex = appendProof.map(p => '0x' + p.toString('hex'));
 
-      const { receipt, logs } = await contractInstance.perform_optimistically_and_enter(
+      const { receipt, logs } = await optimismContractInstance.perform_optimistically_and_enter(
         callDataHex,
         newStateHex,
         proofHex,
-        { from: suspect }
+        { from: user }
       );
       
       // Since the transaction executed successfully, update the locally maintained variables
       const block = await web3.eth.getBlock(receipt.blockNumber);
       lastTime = block.timestamp;
+      packsTree = transition.packsTree;
+      cardsTree = transition.cardsTree;
+      currentState = transition.newState;
       callDataTree = newMerkleTree;
-      currentState = newState;
 
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(user);
       const expectedAccountState = hashPacked([callDataTree.root, currentState, to32ByteBuffer(lastTime)]);
-
-      expect(logs[0].event).to.equal('New_Optimistic_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
 
       expect(accountState).to.equal('0x' + expectedAccountState.toString('hex'));
 
-      expect(receipt.gasUsed).to.equal(33908);
+      expect(logs[0].event).to.equal('New_Optimistic_State');
+      expect(logs[0].args[0]).to.equal(user);
+      expect(logs[0].args[1].toString()).to.equal(lastTime.toString());
+
+      expect(receipt.gasUsed).to.equal(38839);
     });
 
     it("allows a user (suspect) to perform a valid optimistic state transition.", async () => {
