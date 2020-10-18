@@ -2,7 +2,7 @@
 
 ### Status
 
-Just a Proof Of Concept. No client libraries yet. Only "happy path" tested. No security review. Feedback welcome and wanted.
+Just a Proof Of Concept, with Smart Contracts and JS Client. Only "happy path" tested. No security review. Feedback welcome and wanted.
 <br>
 
 ### Brief

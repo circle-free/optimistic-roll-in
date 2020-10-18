@@ -10,10 +10,10 @@ contract Some_Logic_Contract {
     return bytes32(0);
   }
 
-  function some_pure_transition(bytes32 current_state, bytes32 arg) external pure returns (bytes32) {
+  function some_pure_transition(bytes32 current_state, bytes32 some_arg) external pure returns (bytes32) {
     // Just do some expensive work for the sake of the proof of concept
     for (uint256 i; i < 1000; ++i) {
-      current_state = keccak256(abi.encodePacked(current_state, arg));
+      current_state = keccak256(abi.encodePacked(current_state, some_arg));
     }
 
     return current_state;
