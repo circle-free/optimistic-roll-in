@@ -7,6 +7,7 @@ import "../node_modules/merkle-trees/eth/contracts/libraries/calldata/bytes/stan
 import "./some-logic-contract.sol";
 
 // TODO: perhaps a owner-controlled sighash whitelist for optimistically performing, and therefore a non-performing exit method
+// TODO: consider verifying being view, or some kind of forced "come up for air" mechanism
 
 contract Optimistic_Roll_In {
   event Initialized(address indexed user, bytes32 indexed initial_state);
