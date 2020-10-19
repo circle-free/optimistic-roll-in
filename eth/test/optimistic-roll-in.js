@@ -25,23 +25,14 @@ const somePureTransition = (currentState, arg) => {
   return newState;
 };
 
-const somePureTransitionFraud = (fraudIndex) => {
-  let callCount = 0;
-
-  const fraudFunction = (currentState, argHex) => {
-    if (callCount++ === fraudIndex) return to32ByteBuffer(1337);
-
-    return somePureTransition(currentState, argHex);
-  };
-
-  return fraudFunction;
+const someFraudTransition = (currentState, argHex) => {
+  return to32ByteBuffer(1337);
 };
 
 const logicFunctions = {
   'get_initial_state': getInitialState,
   'some_pure_transition': somePureTransition,
 };
-
 
 const generateRandomElement = () => {
   return crypto.randomBytes(32);
@@ -132,9 +123,8 @@ contract("Optimistic Roll In", accounts => {
 
     it("[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).", async () => {
       const someArg = generateElements(1, { seed: '11' })[0];
-      const args = [toHex(someArg)];
 
-      const { receipt } = await suspectOptimist.perform('some_pure_transition', args);
+      const { receipt } = await suspectOptimist.some_pure_transition.normal(toHex(someArg));
       const accountState = await contractInstance.account_states(suspect);
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
@@ -143,9 +133,8 @@ contract("Optimistic Roll In", accounts => {
 
     it("[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).", async () => {
       const someArg = generateElements(1, { seed: '22' })[0];
-      const args = [toHex(someArg)];
 
-      const { receipt, logs } = await suspectOptimist.performIntoOptimism('some_pure_transition', args);
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(toHex(someArg));
       const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
@@ -167,9 +156,8 @@ contract("Optimistic Roll In", accounts => {
 
     it("[ 6] allows a user (suspect) to perform a valid optimistic state transition.", async () => {
       const someArg = generateElements(1, { seed: '33' })[0];
-      const args = [toHex(someArg)];
       
-      const { receipt, logs } = await suspectOptimist.performOptimistically('some_pure_transition', args);
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(toHex(someArg));
       const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
@@ -192,12 +180,18 @@ contract("Optimistic Roll In", accounts => {
     it("[ 8] allows a user (suspect) to perform valid optimistic state transitions in batch.", async () => {
       const calls = 100;
       const someArgs = generateElements(calls, { seed: '44' });
-      const args = toHex(someArgs).map(a => [a]);
-      const functions = args.map(() => 'some_pure_transition');
+
+      for (let i = 0; i < calls; i++) {
+        suspectOptimist.some_pure_transition.queue(toHex(someArgs[i]));
+      }
+
+      expect(suspectOptimist.transitionsQueued).to.equal(calls);
       
-      const { receipt, logs } = await suspectOptimist.performManyOptimistically(functions, args);
+      const { receipt, logs } = await suspectOptimist.sendQueue();
       const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
+
+      expect(suspectOptimist.transitionsQueued).to.equal(0);
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -218,22 +212,32 @@ contract("Optimistic Roll In", accounts => {
     it("[10] allows a user (suspect) to perform fraudulent optimistic state transitions in batch.", async () => {
       const fraudulentIndex = 20;
       fraudulentTransitionIndex = suspectOptimist.transitionCount + fraudulentIndex;
-      
-      // Hijack the internal function
-      logicFunctions["some_pure_transition"] = somePureTransitionFraud(fraudulentIndex);
 
       const calls = 100;
       const someArgs = generateElements(calls, { seed: '55' });
-      const args = toHex(someArgs).map(a => [a]);
-      const functions = args.map(() => 'some_pure_transition');
+
+      for (let i = 0; i < calls; i++) {
+        if (i === fraudulentIndex) {
+          // Hijack the internal function with a fraudulent one
+          logicFunctions["some_pure_transition"] = someFraudTransition;
+        }
+
+        suspectOptimist.some_pure_transition.queue(toHex(someArgs[i]));
+
+        if (i === fraudulentIndex) {
+          // Reset the internal function with the proper one
+          logicFunctions["some_pure_transition"] = somePureTransition;
+        }
+      }
+
+      expect(suspectOptimist.transitionsQueued).to.equal(calls);
       
-      const { receipt, logs } = await suspectOptimist.performManyOptimistically(functions, args);
+      // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
+      const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
+      const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
-      // Reset the internal function
-      logicFunctions["some_pure_transition"] = somePureTransition;
-
-      const accountState = await contractInstance.account_states(suspect);
+      expect(suspectOptimist.transitionsQueued).to.equal(0);
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -259,9 +263,8 @@ contract("Optimistic Roll In", accounts => {
 
     it("[12] allows a user (suspect) to perform a valid optimistic state transition on top of an invalid state.", async () => {
       const someArg = generateElements(1, { seed: '66' })[0];
-      const args = [toHex(someArg)];
       
-      const { receipt, logs } = await suspectOptimist.performOptimistically('some_pure_transition', args);
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(toHex(someArg));
       const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
@@ -287,12 +290,18 @@ contract("Optimistic Roll In", accounts => {
     it("[14] allows a user (suspect) to perform valid optimistic state transitions in batch on top of an invalid state.", async () => {
       const calls = 20;
       const someArgs = generateElements(calls, { seed: '77' });
-      const args = toHex(someArgs).map(a => [a]);
-      const functions = args.map(() => 'some_pure_transition');
+
+      for (let i = 0; i < calls; i++) {
+        suspectOptimist.some_pure_transition.queue(toHex(someArgs[i]));
+      }
+
+      expect(suspectOptimist.transitionsQueued).to.equal(calls);
       
-      const { receipt, logs } = await suspectOptimist.performManyOptimistically(functions, args);
+      const { receipt, logs } = await suspectOptimist.sendQueue();
       const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
+
+      expect(suspectOptimist.transitionsQueued).to.equal(0);
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -345,6 +354,8 @@ contract("Optimistic Roll In", accounts => {
 
       // Prove the fraud
       const { receipt, logs } = await fraudster.proveFraud();
+
+      expect(accuserOptimist.getFraudster(suspect)).to.equal(null);
 
       const suspectBalance = await contractInstance.balances(suspect);
       const suspectLocker = await contractInstance.lockers(suspect);
@@ -418,12 +429,19 @@ contract("Optimistic Roll In", accounts => {
     it("[20] allows a user (suspect) to re-perform valid optimistic state transitions in batch.", async () => {
       const calls = 100;
       const someArgs = generateElements(calls, { seed: '55' });
-      const args = toHex(someArgs).map(a => [a]);
-      const functions = args.map(() => 'some_pure_transition');
+
+      for (let i = 0; i < calls; i++) {
+        suspectOptimist.some_pure_transition.queue(toHex(someArgs[i]));
+      }
+
+      expect(suspectOptimist.transitionsQueued).to.equal(calls);
       
-      const { receipt, logs } = await suspectOptimist.performManyOptimistically(functions, args);
+      // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
+      const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
       const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
+
+      expect(suspectOptimist.transitionsQueued).to.equal(0);
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -439,13 +457,12 @@ contract("Optimistic Roll In", accounts => {
       await advanceTime(suspectOptimist.lastTime + 700);
       
       const someArg = generateElements(1, { seed: '88' })[0];
-      const args = [toHex(someArg)];
-      
-      const { receipt, logs } = await suspectOptimist.performOutOfOptimism('some_pure_transition', args);
+
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.normal(toHex(someArg));
       const accountState = await contractInstance.account_states(suspect);
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-
+      
       expect(logs[0].event).to.equal('ORI_Exited_Optimism');
       expect(logs[0].args[0]).to.equal(suspect);
 
@@ -455,12 +472,19 @@ contract("Optimistic Roll In", accounts => {
     it("[22] allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).", async () => {
       const calls = 50;
       const someArgs = generateElements(calls, { seed: '99' });
-      const args = toHex(someArgs).map(a => [a]);
-      const functions = args.map(() => 'some_pure_transition');
+
+      for (let i = 0; i < calls; i++) {
+        suspectOptimist.some_pure_transition.queue(toHex(someArgs[i]));
+      }
+
+      expect(suspectOptimist.transitionsQueued).to.equal(calls);
       
-      const { receipt, logs } = await suspectOptimist.performManyIntoOptimism(functions, args);
+      // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
+      const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
       const accountState = await contractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
+
+      expect(suspectOptimist.transitionsQueued).to.equal(0);
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
       expect(logs[0].args[0]).to.equal(suspect);

@@ -2,29 +2,28 @@ const assert = require('assert');
 const { MerkleTree, PartialMerkleTree } = require('merkle-trees/js');
 const txDecoder = require('ethereum-tx-decoder');
 
-const { to32ByteBuffer, from32ByteBuffer, hashPacked, toHex, toBuffer } = require('./utils');
+const { to32ByteBuffer, hashPacked, toHex, toBuffer } = require('./utils');
 
 const proofOptions = { compact: true, simple: true };
 
-const isValidTransition = (logicDecoder, functions, callDataHex, newStateHex) => {
-  // Decode arg from calldata and compute expected new state
-  const { current_state: startingStateHex, some_arg: somArgHex } = logicDecoder.decodeFn(callDataHex);
-
-  // TODO: get the function name based off the decoded data and get all args generically somehow
-  const endState = functions['some_pure_transition'](startingStateHex, somArgHex);
-
-  // Fraudulent if the new state computed does not match what was optimistically provided
-  return endState.equals(toBuffer(newStateHex));
-};
-
 class OptimisticRollIn {
   constructor(oriInstance, logicInstance, functions, accountAddress, options = {}) {
-    const { sourceAddress = accountAddress, treeOptions = {}, optimismDecoder, logicDecoder, web3 } = options;
+    const {
+      sourceAddress = accountAddress,
+      treeOptions = {},
+      optimismDecoder,
+      logicDecoder,
+      web3,
+      parentORI,
+    } = options;
+
     const { elementPrefix = '00' } = treeOptions;
 
     assert(web3, 'web3 option is mandatory for now.');
 
     this._web3 = web3;
+
+    this._parentORI = parentORI;
 
     this._treeOptions = { unbalanced: true, sortedHash: false, elementPrefix };
 
@@ -32,6 +31,25 @@ class OptimisticRollIn {
     this._logicContractInstance = logicInstance;
     // logicInstance.methods is object where keys are human readable function signatures
     // logicInstance.address
+
+    this._sighashes = {};
+
+    logicInstance.abi.forEach(({ name, type, signature, stateMutability }) => {
+      if (type !== 'function') return;
+
+      this._sighashes[signature] = name;
+
+      const functionSet = { normal: (...args) => this._pessimisticCall(name, args) };
+
+      if (stateMutability === 'pure' || stateMutability === 'view') {
+        Object.assign(functionSet, {
+          optimistic: (...args) => this._optimisticCall(name, args),
+          queue: (...args) => this._queueCall(name, args),
+        });
+      }
+
+      Object.assign(this, { [name]: functionSet });
+    });
 
     this._optimismDecoder = optimismDecoder ?? new txDecoder.FunctionDecoder(oriInstance.abi);
     this._logicDecoder = logicDecoder ?? new txDecoder.FunctionDecoder(logicInstance.abi);
@@ -45,6 +63,12 @@ class OptimisticRollIn {
       currentState: null,
       lastTime: null,
       fraudIndex: null,
+    };
+
+    this._queue = {
+      newStates: [],
+      functionNames: [],
+      args: [],
     };
 
     this._frauds = {};
@@ -63,6 +87,7 @@ class OptimisticRollIn {
       optimismDecoder,
       logicDecoder,
       web3,
+      parentORI,
     } = options;
 
     const oriOptions = {
@@ -71,6 +96,7 @@ class OptimisticRollIn {
       logicDecoder,
       treeOptions,
       web3,
+      parentORI,
     };
 
     const fraudster = new OptimisticRollIn(oriInstance, logicInstance, functions, suspect, oriOptions);
@@ -114,12 +140,19 @@ class OptimisticRollIn {
 
   // GETTER: Returns the number of optimistic transitions of the account
   get transitionCount() {
+    // TODO: this only considers on-chain transitions, but not locally queued ones
     return this._state.callDataTree.elements.length;
   }
 
-  // TODO: getter for time remaining before can exit optimism
-  get timeRemaining() {
-    return null;
+  // GETTER: Returns if in optimistic state
+  get isInOptimisticState() {
+    // return !this._state.callDataTree.root.equals(to32ByteBuffer(0)) && this._state.lastTime !== 0;
+    return this._state.lastTime !== 0;
+  }
+
+  // GETTER: Returns if in optimistic state
+  get transitionsQueued() {
+    return this._queue.newStates.length;
   }
 
   // PRIVATE: Initializes the state with empty call data tree, initial state, and 0 last optimistic time
@@ -130,7 +163,7 @@ class OptimisticRollIn {
   }
 
   // PRIVATE: Updates the state with empty call data tree, computed new state, and 0 last optimistic time
-  _updateState(functionName, args) {
+  _updateStatePessimistically(functionName, args) {
     this._state.callDataTree = new MerkleTree([], this._treeOptions);
     this._state.currentState = this._functions[functionName](this._state.currentState, ...args);
     this._state.lastTime = 0;
@@ -156,9 +189,37 @@ class OptimisticRollIn {
       optimismDecoder: this._optimismDecoder,
       logicDecoder: this._logicDecoder,
       web3: this._web3,
+      parentORI: this,
     };
 
     this._frauds[suspect] = OptimisticRollIn.fraudsterFromProof(parameters, options);
+  }
+
+  _isValidTransition = (callDataHex, newStateHex) => {
+    // Decode arg from calldata and compute expected new state
+    const { sighash, current_state: startingStateHex, some_arg: somArgHex } = this._logicDecoder.decodeFn(callDataHex);
+
+    const functionName = this._sighashes[sighash];
+
+    // TODO: get the function name based off the decoded data and get all args generically somehow
+    const endState = this._functions[functionName](startingStateHex, somArgHex);
+
+    // Fraudulent if the new state computed does not match what was optimistically provided
+    return endState.equals(toBuffer(newStateHex));
+  };
+
+  // PRIVATE: Verifies an optimistic transition, and creates a fraudster ORI if fraud is found
+  _verifyTransition(suspect, decodedOptimismData, lastTime) {
+    // Decode the optimism input data
+    const { call_data: callDataHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
+
+    if (this._isValidTransition(callDataHex, newStateHex)) {
+      return { valid: true, user: suspect };
+    }
+
+    this._recordFraud({ suspect, fraudIndex: 0, callDataArrayHex: [callDataHex], newStateHex, proofHex, lastTime });
+
+    return { valid: false, user: suspect };
   }
 
   // PRIVATE: Verifies batch optimistic transitions, and creates a fraudster ORI if fraud is found
@@ -173,7 +234,7 @@ class OptimisticRollIn {
           ? newStateHex
           : this._logicDecoder.decodeFn(callDataArrayHex[i + 1]).current_state;
 
-      if (isValidTransition(this._logicDecoder, this._functions, callDataArrayHex[i], intermediateStateHex)) continue;
+      if (this._isValidTransition(callDataArrayHex[i], intermediateStateHex)) continue;
 
       this._recordFraud({ suspect, fraudIndex: i, callDataArrayHex, newStateHex, proofHex, lastTime });
 
@@ -181,41 +242,6 @@ class OptimisticRollIn {
     }
 
     return { valid: true, user: suspect };
-  }
-
-  // PRIVATE: Verifies an optimistic transition, and creates a fraudster ORI if fraud is found
-  _verifyTransition(suspect, decodedOptimismData, lastTime) {
-    // Decode the optimism input data
-    const { call_data: callDataHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
-
-    if (isValidTransition(this._logicDecoder, this._functions, callDataHex, newStateHex)) {
-      return { valid: true, user: suspect };
-    }
-
-    this._recordFraud({ suspect, fraudIndex: 0, callDataArrayHex: [callDataHex], newStateHex, proofHex, lastTime });
-
-    return { valid: false, user: suspect };
-  }
-
-  // PRIVATE: Updates internal account given some new batch optimistic transitions
-  _updateWithBatchTransitions(decodedOptimismData, lastTime) {
-    // Decode the optimism input data
-    const {
-      call_data: callDataArrayHex,
-      new_state: newStateHex,
-      call_data_root: callDataRootHex,
-      last_time: originalLastTimeBN,
-    } = decodedOptimismData;
-
-    assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
-    assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
-
-    // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
-    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataArrayHex[0]);
-    assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
-
-    const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataArrayHex));
-    this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
   }
 
   // PRIVATE: Updates internal account given some new optimistic transition
@@ -239,53 +265,42 @@ class OptimisticRollIn {
     this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
   }
 
-  // PUBLIC: Bonds the user's account, using the source address (which may be the same as the user)
-  bond(amount) {
-    // TODO: prevent over-bonding unless option to force
+  // PRIVATE: Updates internal account given some new batch optimistic transitions
+  _updateWithBatchTransitions(decodedOptimismData, lastTime) {
+    // Decode the optimism input data
+    const {
+      call_data: callDataArrayHex,
+      new_state: newStateHex,
+      call_data_root: callDataRootHex,
+      last_time: originalLastTimeBN,
+    } = decodedOptimismData;
 
-    const callOptions = { value: amount, from: this._sourceAddress };
-    return this._oriContractInstance.bond(this._state.user, callOptions);
+    assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
+    assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
+
+    // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
+    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataArrayHex[0]);
+    assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
+
+    const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataArrayHex));
+    this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
   }
 
-  // PUBLIC: Initialize the on-chain account and the internal state (only for self)
-  async initialize() {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    // TODO: prevent initializing already initialized account
-
-    const result = await this._oriContractInstance.initialize({ from: this._sourceAddress });
-    this._initializeState();
-
-    return result;
-  }
-
-  async _getCalldata(currentState, functionName, args = []) {
-    // Get the call logic contract address and call data from a logic request
-    // TODO: this can and should be done locally and synchronously
-    const { data: callDataHex } = await this._logicContractInstance[functionName].request(
-      toHex(currentState),
-      ...args,
-      { from: this._sourceAddress }
-    );
-
-    return callDataHex;
-  }
-
-  // PUBLIC: Non-optimistically perform a transition, and update internal state (only for self)
-  async perform(functionName, args = []) {
+  // PRIVATE: Non-optimistically perform a transition, and update internal state (only for self)
+  async _performPessimistically(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
 
     // TODO: prevent performing unless out of optimism, or automatically perform and exit
 
     const callDataHex = await this._getCalldata(this._state.currentState, functionName, args);
     const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress });
-    this._updateState(functionName, args);
+    this._updateStatePessimistically(functionName, args);
 
     return result;
   }
 
-  // PUBLIC: Non-optimistically perform a transition to exit optimistic state, and update internal state (only for self)
-  async performOutOfOptimism(functionName, args = []) {
+  // PRIVATE: Non-optimistically perform a transition to exit optimistic state, and update internal state (only for self)
+  async _performPessimisticallyWhileExitingOptimism(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
 
     // TODO: prevent performing unless in optimism, or automatically perform non-optimistically
@@ -299,13 +314,13 @@ class OptimisticRollIn {
       { from: this._sourceAddress }
     );
 
-    this._updateState(functionName, args);
+    this._updateStatePessimistically(functionName, args);
 
     return result;
   }
 
-  // PUBLIC: Optimistically perform a transition to enter optimistic state, and update internal state (only for self)
-  async performIntoOptimism(functionName, args = []) {
+  // PRIVATE: Optimistically perform a transition to enter optimistic state, and update internal state (only for self)
+  async _performOptimisticallyWhileEnteringOptimism(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
 
     // TODO: prevent performing unless out of optimism, or automatically perform optimistically
@@ -333,8 +348,8 @@ class OptimisticRollIn {
     return result;
   }
 
-  // PUBLIC: Optimistically perform a transition while already in optimistic state, and update internal state (only for self)
-  async performOptimistically(functionName, args = []) {
+  // PRIVATE: Optimistically perform a transition while already in optimistic state, and update internal state (only for self)
+  async _performOptimistically(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
 
     // TODO: prevent performing unless in optimism, or automatically perform and enter
@@ -364,44 +379,10 @@ class OptimisticRollIn {
     return result;
   }
 
-  // PUBLIC: Optimistically perform batch transitions to enter optimistic state, and update internal state (only for self)
-  async performManyIntoOptimism(functionNames = [], args = []) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-    assert(functionNames.length > 0, 'No function calls specified.');
-    assert(functionNames.length === args.length, 'Function and args count mismatch.');
+  // PRIVATE: Optimistically perform batch transitions while already in optimistic state, and update internal state (only for self)
+  async _performBatchOptimistically(newStates = [], functionNames = [], args = [], options = {}) {
+    const { checkStates = true } = options;
 
-    // TODO: prevent performing unless out of optimism, or automatically perform optimistically
-
-    // Compute the new state from the current state, locally
-    const callDataArray = [];
-    let newState = this._state.currentState;
-
-    for (let i = 0; i < functionNames.length; i++) {
-      const callDataHex = await this._getCalldata(newState, functionNames[i], args[i]);
-      callDataArray.push(toBuffer(callDataHex));
-      newState = this._functions[functionNames[i]](newState, ...args[i]);
-    }
-
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, proofOptions);
-
-    const result = await this._oriContractInstance.perform_many_optimistically_and_enter(
-      toHex(callDataArray),
-      toHex(newState),
-      toHex(proof.compactProof),
-      { from: this._sourceAddress }
-    );
-
-    // TODO: do not assume logs[0]
-    const lastTime = parseInt(result.receipt.logs[0].args[1], 10);
-
-    this._updateStateOptimistically(newMerkleTree, newState, lastTime);
-
-    return result;
-  }
-
-  // PUBLIC: Optimistically perform batch transitions while already in optimistic state, and update internal state (only for self)
-  async performManyOptimistically(functionNames = [], args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
     assert(functionNames.length > 0, 'No function calls specified.');
     assert(functionNames.length === args.length, 'Function and args count mismatch.');
@@ -415,7 +396,15 @@ class OptimisticRollIn {
     for (let i = 0; i < functionNames.length; i++) {
       const callDataHex = await this._getCalldata(newState, functionNames[i], args[i]);
       callDataArray.push(toBuffer(callDataHex));
+
+      if (!checkStates) {
+        newState = newStates[i];
+        continue;
+      }
+
       newState = this._functions[functionNames[i]](newState, ...args[i]);
+
+      assert(newState.equals(newStates[i]), 'New state mismatch.');
     }
 
     // Get the expected new call data tree and append proof
@@ -436,6 +425,159 @@ class OptimisticRollIn {
     this._updateStateOptimistically(newMerkleTree, newState, lastTime);
 
     return result;
+  }
+
+  // PRIVATE: Optimistically perform batch transitions to enter optimistic state, and update internal state (only for self)
+  async _performBatchOptimisticallyWhileEnteringOptimism(newStates = [], functionNames = [], args = [], options = {}) {
+    const { checkStates = false } = options;
+
+    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
+    assert(functionNames.length > 0, 'No function calls specified.');
+    assert(functionNames.length === args.length, 'Function and args count mismatch.');
+
+    // TODO: prevent performing unless out of optimism, or automatically perform optimistically
+
+    // Compute the new state from the current state, locally
+    const callDataArray = [];
+    let newState = this._state.currentState;
+
+    for (let i = 0; i < functionNames.length; i++) {
+      const callDataHex = await this._getCalldata(newState, functionNames[i], args[i]);
+      callDataArray.push(toBuffer(callDataHex));
+
+      if (!checkStates) {
+        newState = newStates[i];
+        continue;
+      }
+
+      newState = this._functions[functionNames[i]](newState, ...args[i]);
+
+      assert(newState.equals(newStates[i]), 'New state mismatch.');
+    }
+
+    // Get the expected new call data tree and append proof
+    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, proofOptions);
+
+    const result = await this._oriContractInstance.perform_many_optimistically_and_enter(
+      toHex(callDataArray),
+      toHex(newState),
+      toHex(proof.compactProof),
+      { from: this._sourceAddress }
+    );
+
+    // TODO: do not assume logs[0]
+    const lastTime = parseInt(result.receipt.logs[0].args[1], 10);
+
+    this._updateStateOptimistically(newMerkleTree, newState, lastTime);
+
+    return result;
+  }
+
+  // PRIVATE: performs a non-optimistic contract call, on-chain
+  async _pessimisticCall(functionName, args = []) {
+    // if in optimism and can't exit yet, throw
+    assert(this.isInOptimisticState || (await this.canExit()), 'In optimistic state and cannot yet exit.');
+
+    // if in optimism and can exit, perform and exit
+    if (this.isInOptimisticState) return this._performPessimisticallyWhileExitingOptimism(functionName, args);
+
+    // if not in optimism, perform
+    return this._performPessimistically(functionName, args);
+  }
+
+  // PRIVATE: performs an optimistic contract call, on-chain
+  _optimisticCall(functionName, args = []) {
+    // if not in optimism, perform and enter
+    if (!this.isInOptimisticState) return this._performOptimisticallyWhileEnteringOptimism(functionName, args);
+
+    // if in optimism, perform optimistically
+    return this._performOptimistically(functionName, args);
+  }
+
+  // PRIVATE: queues a transition to be broadcasted in batch later
+  _queueCall(functionName, args = []) {
+    const newStatesLength = this._queue.newStates.length;
+    const currentState = newStatesLength ? this._queue.newStates[newStatesLength - 1] : this._state.currentState;
+
+    const newState = this._functions[functionName](currentState, ...args);
+
+    this._queue.newStates.push(newState);
+    this._queue.functionNames.push(functionName);
+    this._queue.args.push(args);
+  }
+
+  // PRIVATE: Returns call data hex needed to call a function, given the current state and args
+  async _getCalldata(currentState, functionName, args = []) {
+    // Get the call logic contract address and call data from a logic request
+    // TODO: this can and should be done locally and synchronously
+    const { data: callDataHex } = await this._logicContractInstance[functionName].request(
+      toHex(currentState),
+      ...args,
+      { from: this._sourceAddress }
+    );
+
+    return callDataHex;
+  }
+
+  // TODO: Returns if can exit optimism
+  async canExit() {
+    const currentBlockNumber = await this._web3.eth.getBlockNumber();
+    const { timestamp } = await this._web3.eth.getBlock(currentBlockNumber);
+
+    // TODO: make threshold an ORI option
+    return this._state.lastTime + 600 < timestamp;
+  }
+
+  // PUBLIC: Bonds the user's account, using the source address (which may be the same as the user)
+  bond(amount) {
+    // TODO: prevent over-bonding unless option to force
+
+    const callOptions = { value: amount, from: this._sourceAddress };
+    return this._oriContractInstance.bond(this._state.user, callOptions);
+  }
+
+  // PUBLIC: Initialize the on-chain account and the internal state (only for self)
+  async initialize() {
+    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
+
+    // TODO: prevent initializing already initialized account
+
+    const result = await this._oriContractInstance.initialize({ from: this._sourceAddress });
+    this._initializeState();
+
+    return result;
+  }
+
+  // PUBLIC: Rolls the entire transition queue into a single transaction and broadcasts (only for self)
+  async sendQueue(options = {}) {
+    const { checkStates = true } = options;
+    const performOptions = { checkStates };
+
+    // if in optimism, perform optimistically, else, perform and enter
+    const result = this.isInOptimisticState
+      ? await this._performBatchOptimistically(
+          this._queue.newStates,
+          this._queue.functionNames,
+          this._queue.args,
+          performOptions
+        )
+      : await this._performBatchOptimisticallyWhileEnteringOptimism(
+          this._queue.newStates,
+          this._queue.functionNames,
+          this._queue.args,
+          performOptions
+        );
+
+    this.clearQueue();
+
+    return result;
+  }
+
+  // PUBLIC: Clear the queued transitions
+  clearQueue() {
+    this._queue.newStates.length = 0;
+    this._queue.functionNames.length = 0;
+    this._queue.args.length = 0;
   }
 
   // TODO: function to build chain of optimistic transition, without submitting
@@ -523,7 +665,15 @@ class OptimisticRollIn {
     // TODO: This is just a hack to prevent re-proving fraud after the first success
     this._state.fraudIndex = null;
 
+    if (this._parentORI) {
+      this._parentORI.deleteFraudster(this._state.user);
+    }
+
     return result;
+  }
+
+  deleteFraudster(user) {
+    this._frauds[user] = null;
   }
 
   withdraw(destination) {
