@@ -18,11 +18,35 @@
  *
  */
 
-// const HDWalletProvider = require('@truffle/hdwallet-provider');
+const fs = require('fs');
+const mnemonic = fs.readFileSync(".mnemonic").toString().trim();
+const infuraKey = fs.readFileSync(".infura").toString().trim();
+// const maticVigilKey = fs.readFileSync(".vigil").toString().trim();
+
+const HDWalletProvider = require("@truffle/hdwallet-provider");
+// const Web3 = require("web3");
+// const maticProvider = () => new HDWalletProvider({
+//   mnemonic,
+//   providerOrUrl: `https://rpc-mumbai.maticvigil.com/v1/${maticVigilKey}`
+// });
+// const maticProvider = () => new HDWalletProvider({
+//   mnemonic,
+//   providerOrUrl: "https://rpc-mumbai.maticvigil.com"
+// });
+const maticProvider = () => new HDWalletProvider({
+  mnemonic,
+  providerOrUrl: "https://rpc-mumbai.matic.today"
+});
+const ropstenProvider = () => new HDWalletProvider({
+  mnemonic,
+  providerOrUrl: `https://ropsten.infura.io/v3/${infuraKey}`
+});
+const rinkebyProvider = () => new HDWalletProvider({
+  mnemonic,
+  providerOrUrl: `https://rinkeby.infura.io/v3/${infuraKey}`
+});
+
 // const infuraKey = "fj4jll3k.....";
-//
-// const fs = require('fs');
-// const mnemonic = fs.readFileSync(".secret").toString().trim();
 
 module.exports = {
   /**
@@ -43,9 +67,37 @@ module.exports = {
     // options below to some value.
     //
     development: {
-      host: '127.0.0.1', // Localhost (default: none)
-      port: 7545, // Standard Ethereum port (default: none)
-      network_id: '5777', // Any network (default: none)
+      host: "127.0.0.1",     // Localhost (default: none)
+      port: 7545,            // Standard Ethereum port (default: none)
+      network_id: 5777,    // Any network (default: none)
+    },
+    matic: {
+      provider: maticProvider,
+      network_id: 80001,
+      confirmations: 1,
+      timeoutBlocks: 200,
+      skipDryRun: true,
+      gasPrice: 1000000000
+    },
+    ropsten: {
+      provider: ropstenProvider,
+      network_id: 3,
+      confirmations: 1,
+      timeoutBlocks: 200,
+      skipDryRun: true,
+      gasPrice: 1000,
+      gas: 5500000,
+      // gasPrice: 1000000000
+    },
+    rinkeby: {
+      provider: rinkebyProvider,
+      network_id: 4,
+      confirmations: 1,
+      timeoutBlocks: 200,
+      skipDryRun: true,
+      gasPrice: 1000000,
+      gas: 5500000,
+      // gasPrice: 1000000000
     },
     // Another network with more advanced options...
     // advanced: {
@@ -59,12 +111,12 @@ module.exports = {
     // Useful for deploying to a public network.
     // NB: It's important to wrap the provider as a function.
     // ropsten: {
-    // provider: () => new HDWalletProvider(mnemonic, `https://ropsten.infura.io/v3/YOUR-PROJECT-ID`),
-    // network_id: 3,       // Ropsten's id
-    // gas: 5500000,        // Ropsten has a lower block limit than mainnet
-    // confirmations: 2,    // # of confs to wait between deployments. (default: 0)
-    // timeoutBlocks: 200,  // # of blocks before a deployment times out  (minimum/default: 50)
-    // skipDryRun: true     // Skip dry run before migrations? (default: false for public nets )
+    //   provider: () => new HDWalletProvider(mnemonic, `https://ropsten.infura.io/v3/YOUR-PROJECT-ID`),
+    //   network_id: 3,       // Ropsten's id
+    //   gas: 5500000,        // Ropsten has a lower block limit than mainnet
+    //   confirmations: 2,    // # of confirmations to wait between deployments. (default: 0)
+    //   timeoutBlocks: 200,  // # of blocks before a deployment times out  (minimum/default: 50)
+    //   skipDryRun: true     // Skip dry run before migrations? (default: false for public nets )
     // },
     // Useful for private networks
     // private: {

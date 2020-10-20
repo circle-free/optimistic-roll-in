@@ -1,8 +1,11 @@
 {
   "cSpell.words": [
+    "Ropsten's",
     "SPDX",
     "Unbonds",
     "fraudster's",
+    "gitignored",
+    "hdwallet",
     "keccak",
     "merkle",
     "mload",
@@ -13,7 +16,9 @@
     "solhint",
     "solpp",
     "unbond",
+    "truffleframework",
     "unbonding",
-    "veedo"
+    "veedo",
+    "websockets"
   ]
 }
