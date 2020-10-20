@@ -7,5 +7,6 @@
     "function-max-lines": ["warn", 100],
     "max-line-length": ["error", 150],
     "no-unused-vars": "warn"
-  }
+  },
+  "solidity.packageDefaultDependenciesDirectory": "node_modules"
 }
