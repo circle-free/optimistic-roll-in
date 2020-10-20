@@ -10,7 +10,6 @@ import "merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-libr
 // TODO: make required bond queryable
 
 contract Optimistic_Roll_In {
-  event ORI_Initialized(address indexed user, bytes32 indexed initial_state);
   event ORI_New_State(address indexed user, bytes32 new_state);
   event ORI_New_Optimistic_State(address indexed user, uint256 indexed block_time);
   event ORI_New_Optimistic_States(address indexed user, uint256 indexed block_time);
@@ -106,7 +105,7 @@ contract Optimistic_Roll_In {
     // Set account state to combination of empty call data tree, initial state (S_0), and last time of 0 (not in optimism)
     account_states[user] = keccak256(abi.encodePacked(bytes32(0), initial_state, bytes32(0)));
 
-    emit ORI_Initialized(user, initial_state);
+    emit ORI_New_State(user, initial_state);
   }
 
   // Allows unbonding of ETH if account not locked

@@ -12,8 +12,6 @@ const optimisticTreeOptions = {
   elementPrefix: '00',
 };
 
-const getInitialState = () => to32ByteBuffer(0);
-
 const somePureTransition = (currentState, arg) => {
   let newState = Buffer.isBuffer(currentState) ? currentState : toBuffer(currentState);
   arg = Buffer.isBuffer(arg) ? arg : toBuffer(arg);
@@ -30,7 +28,6 @@ const someFraudTransition = (currentState, argHex) => {
 };
 
 const logicFunctions = {
-  get_initial_state: getInitialState,
   some_pure_transition: somePureTransition,
 };
 
@@ -130,11 +127,11 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      expect(logs[0].event).to.equal('ORI_Initialized');
+      expect(logs[0].event).to.equal('ORI_New_State');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      expect(receipt.gasUsed).to.equal(46487);
+      expect(receipt.gasUsed).to.equal(46437);
     });
 
     it('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
