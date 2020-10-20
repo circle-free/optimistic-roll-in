@@ -4,7 +4,6 @@ pragma solidity >=0.6.0 <=0.7.3;
 pragma experimental ABIEncoderV2;
 
 import "merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-library.sol";
-import "./some-logic-contract.sol";
 
 // TODO: perhaps a owner-controlled sighash whitelist for optimistically performing, and therefore a non-performing exit method
 // TODO: consider verifying being view, or some kind of forced "come up for air" mechanism

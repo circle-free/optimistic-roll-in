@@ -8,7 +8,7 @@ const SomeLogicContractArtifact = artifacts.require('Some_Logic_Contract');
 const OptimisticRollIn = require('../../js/src');
 const { to32ByteBuffer, hashPacked, toHex, toBuffer } = require('../../js/src/utils');
 
-const treeOptions = {
+const optimisticTreeOptions = {
   elementPrefix: '00',
 };
 
@@ -96,7 +96,7 @@ contract('Optimistic Roll In', (accounts) => {
       logicAddress = logicContractInstance.address;
       optimismContractInstance = await OptimisticRollInArtifact.new(logicAddress, initialStateSelector);
 
-      const oriOptions = { treeOptions, web3 };
+      const oriOptions = { optimisticTreeOptions, web3 };
 
       suspectOptimist = new OptimisticRollIn(
         optimismContractInstance,

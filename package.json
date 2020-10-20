@@ -16,8 +16,8 @@
     "solidity"
   ],
   "scripts": {
-    "test": "mocha 'js/tests' && truffle test",
-    "test-eth": "truffle test",
+    "test": "truffle compile && mocha 'js/tests' && truffle test",
+    "test-eth": "truffle compile && truffle test",
     "test-js": "mocha 'js/tests'",
     "ganache": "ganache-cli",
     "lint-eth": "solhint 'eth/contracts/**/*.sol'",
