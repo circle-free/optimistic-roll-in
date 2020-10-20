@@ -6,7 +6,7 @@ const OptimisticRollInArtifact = artifacts.require('Optimistic_Roll_In');
 const SomeLogicContractArtifact = artifacts.require('Some_Logic_Contract');
 
 const OptimisticRollIn = require('../../js/src');
-const { to32ByteBuffer, hashPacked, toHex } = require('../../js/src/utils');
+const { to32ByteBuffer, hashPacked, toHex, toBuffer } = require('../../js/src/utils');
 
 const treeOptions = {
   elementPrefix: '00',
@@ -15,8 +15,8 @@ const treeOptions = {
 const getInitialState = () => to32ByteBuffer(0);
 
 const somePureTransition = (currentState, arg) => {
-  let newState = Buffer.isBuffer(currentState) ? currentState : Buffer.from(currentState.slice(2), 'hex');
-  arg = Buffer.isBuffer(arg) ? arg : Buffer.from(arg.slice(2), 'hex');
+  let newState = Buffer.isBuffer(currentState) ? currentState : toBuffer(currentState);
+  arg = Buffer.isBuffer(arg) ? arg : toBuffer(arg);
 
   for (let i = 0; i < 1000; i++) {
     newState = hashPacked([newState, arg]);
@@ -88,25 +88,26 @@ contract('Optimistic Roll In', (accounts) => {
 
     let logicContractInstance = null;
     let logicAddress = null;
-    let contractInstance = null;
+    let optimismContractInstance = null;
     let fraudulentTransitionIndex = null;
 
     before(async () => {
       logicContractInstance = await SomeLogicContractArtifact.new();
       logicAddress = logicContractInstance.address;
-      contractInstance = await OptimisticRollInArtifact.new(logicAddress, initialStateSelector);
+      optimismContractInstance = await OptimisticRollInArtifact.new(logicAddress, initialStateSelector);
 
       const oriOptions = { treeOptions, web3 };
 
       suspectOptimist = new OptimisticRollIn(
-        contractInstance,
+        optimismContractInstance,
         logicContractInstance,
         logicFunctions,
         suspect,
         oriOptions
       );
+
       accuserOptimist = new OptimisticRollIn(
-        contractInstance,
+        optimismContractInstance,
         logicContractInstance,
         logicFunctions,
         accuser,
@@ -117,7 +118,7 @@ contract('Optimistic Roll In', (accounts) => {
     it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
       suspectBondAmount = '1000000000000000000';
       const { receipt } = await suspectOptimist.bond(suspectBondAmount);
-      const balance = await contractInstance.balances(suspect);
+      const balance = await optimismContractInstance.balances(suspect);
 
       expect(balance.toString()).to.equal(suspectBondAmount);
       expect(receipt.gasUsed).to.equal(42706);
@@ -125,7 +126,7 @@ contract('Optimistic Roll In', (accounts) => {
 
     it('[ 2] can initialize a user (suspect).', async () => {
       const { receipt, logs } = await suspectOptimist.initialize();
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
@@ -139,18 +140,23 @@ contract('Optimistic Roll In', (accounts) => {
     it('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
       const someArg = generateElements(1, { seed: '11' })[0];
 
-      const { receipt } = await suspectOptimist.some_pure_transition.normal(toHex(someArg));
-      const accountState = await contractInstance.account_states(suspect);
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.normal(toHex(someArg));
+      const accountState = await optimismContractInstance.account_states(suspect);
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-      expect(receipt.gasUsed).to.equal(286340);
+
+      expect(logs[0].event).to.equal('ORI_New_State');
+      expect(logs[0].args[0]).to.equal(suspect);
+      expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
+
+      expect(receipt.gasUsed).to.equal(287798);
     });
 
     it('[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).', async () => {
       const someArg = generateElements(1, { seed: '22' })[0];
 
       const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(toHex(someArg));
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_State');
@@ -163,7 +169,7 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[ 5] allows a user (accuser) to immediately verify a valid optimistic state transition.', async () => {
-      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, web3);
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
 
       expect(valid).to.be.true;
       expect(user).to.equal(suspect.toLowerCase());
@@ -173,7 +179,7 @@ contract('Optimistic Roll In', (accounts) => {
       const someArg = generateElements(1, { seed: '33' })[0];
 
       const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(toHex(someArg));
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_State');
@@ -186,7 +192,7 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[ 7] allows a user (accuser) to immediately verify a valid optimistic state transition.', async () => {
-      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, web3);
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
 
       expect(valid).to.be.true;
       expect(user).to.equal(suspect.toLowerCase());
@@ -203,7 +209,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
       const { receipt, logs } = await suspectOptimist.sendQueue();
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
@@ -218,7 +224,7 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[ 9] allows a user (accuser) to immediately verify valid batched optimistic state transitions.', async () => {
-      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, web3);
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
 
       expect(valid).to.be.true;
       expect(user).to.equal(suspect.toLowerCase());
@@ -249,7 +255,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
       const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
@@ -264,13 +270,13 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[11] allows a user (accuser) to immediately detect a transaction containing a fraudulent state transition.', async () => {
-      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, web3);
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
 
       expect(valid).to.be.false;
       expect(user).to.equal(suspect.toLowerCase());
 
       const fraudster = accuserOptimist.getFraudster(suspect);
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
 
       expect(fraudster.fraudIndex).to.equal(fraudulentTransitionIndex);
       expect(accountState).to.equal(toHex(fraudster.accountState));
@@ -280,7 +286,7 @@ contract('Optimistic Roll In', (accounts) => {
       const someArg = generateElements(1, { seed: '66' })[0];
 
       const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(toHex(someArg));
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(logs[0].event).to.equal('ORI_New_Optimistic_State');
@@ -296,7 +302,7 @@ contract('Optimistic Roll In', (accounts) => {
       const fraudster = accuserOptimist.getFraudster(suspect);
 
       await fraudster.update(suspectLastTxId);
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
 
       // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
       expect(accountState).to.equal(toHex(fraudster.accountState));
@@ -313,7 +319,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
       const { receipt, logs } = await suspectOptimist.sendQueue();
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
@@ -334,11 +340,11 @@ contract('Optimistic Roll In', (accounts) => {
       const { receipt, logs } = await fraudster.lock({ bond: accuserBondAmount });
 
       const block = await web3.eth.getBlock(receipt.blockNumber);
-      const balance = await contractInstance.balances(accuser);
-      const suspectLocker = await contractInstance.lockers(suspect);
-      const suspectLockedTime = await contractInstance.locked_times(suspect);
-      const accuserLocker = await contractInstance.lockers(accuser);
-      const accuserLockedTime = await contractInstance.locked_times(accuser);
+      const balance = await optimismContractInstance.balances(accuser);
+      const suspectLocker = await optimismContractInstance.lockers(suspect);
+      const suspectLockedTime = await optimismContractInstance.locked_times(suspect);
+      const accuserLocker = await optimismContractInstance.lockers(accuser);
+      const accuserLockedTime = await optimismContractInstance.locked_times(accuser);
 
       expect(logs[0].event).to.equal('ORI_Locked');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -358,7 +364,7 @@ contract('Optimistic Roll In', (accounts) => {
       const fraudster = accuserOptimist.getFraudster(suspect);
 
       await fraudster.update(suspectLastTxId);
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
 
       // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
       expect(accountState).to.equal(toHex(fraudster.accountState));
@@ -372,14 +378,14 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accuserOptimist.getFraudster(suspect)).to.equal(null);
 
-      const suspectBalance = await contractInstance.balances(suspect);
-      const suspectLocker = await contractInstance.lockers(suspect);
-      const suspectLockedTime = await contractInstance.locked_times(suspect);
-      const suspectRollbackSize = await contractInstance.rollback_sizes(suspect);
+      const suspectBalance = await optimismContractInstance.balances(suspect);
+      const suspectLocker = await optimismContractInstance.lockers(suspect);
+      const suspectLockedTime = await optimismContractInstance.locked_times(suspect);
+      const suspectRollbackSize = await optimismContractInstance.rollback_sizes(suspect);
 
-      const accuserBalance = await contractInstance.balances(accuser);
-      const accuserLocker = await contractInstance.lockers(accuser);
-      const accuserLockedTime = await contractInstance.locked_times(accuser);
+      const accuserBalance = await optimismContractInstance.balances(accuser);
+      const accuserLocker = await optimismContractInstance.lockers(accuser);
+      const accuserLockedTime = await optimismContractInstance.locked_times(accuser);
 
       const expectedAccuserBalance = web3.utils
         .toBN(suspectBondAmount)
@@ -409,8 +415,8 @@ contract('Optimistic Roll In', (accounts) => {
       const startingEth = BigInt(await web3.eth.getBalance(accuser));
       const { receipt } = await accuserOptimist.withdraw(accuser);
       const endingEth = BigInt(await web3.eth.getBalance(accuser));
-      const balanceUser0 = await contractInstance.balances(suspect);
-      const balanceUser1 = await contractInstance.balances(accuser);
+      const balanceUser0 = await optimismContractInstance.balances(suspect);
+      const balanceUser1 = await optimismContractInstance.balances(accuser);
 
       accuserBondAmount = '0';
 
@@ -426,11 +432,11 @@ contract('Optimistic Roll In', (accounts) => {
         bondAmount: suspectBondAmount,
       });
 
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
 
-      const suspectBalance = await contractInstance.balances(suspect);
-      const suspectLocker = await contractInstance.lockers(suspect);
-      const suspectRollbackSize = await contractInstance.rollback_sizes(suspect);
+      const suspectBalance = await optimismContractInstance.balances(suspect);
+      const suspectLocker = await optimismContractInstance.lockers(suspect);
+      const suspectRollbackSize = await optimismContractInstance.rollback_sizes(suspect);
 
       expect(logs[0].event).to.equal('ORI_Rolled_Back');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -458,7 +464,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
       const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
@@ -479,14 +485,15 @@ contract('Optimistic Roll In', (accounts) => {
       const someArg = generateElements(1, { seed: '88' })[0];
 
       const { receipt, logs } = await suspectOptimist.some_pure_transition.normal(toHex(someArg));
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      expect(logs[0].event).to.equal('ORI_Exited_Optimism');
+      expect(logs[0].event).to.equal('ORI_New_State');
       expect(logs[0].args[0]).to.equal(suspect);
+      expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      expect(receipt.gasUsed).to.equal(289522);
+      expect(receipt.gasUsed).to.equal(289832);
     });
 
     it('[22] allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).', async () => {
@@ -501,7 +508,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
       const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
-      const accountState = await contractInstance.account_states(suspect);
+      const accountState = await optimismContractInstance.account_states(suspect);
       suspectLastTxId = receipt.transactionHash;
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
