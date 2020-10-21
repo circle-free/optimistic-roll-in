@@ -8,6 +8,8 @@ import "merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-libr
 // TODO: perhaps a owner-controlled sighash whitelist for optimistically performing, and therefore a non-performing exit method
 // TODO: consider verifying being view, or some kind of forced "come up for air" mechanism
 // TODO: make required bond queryable
+// TODO: logic_address cannot be immutable if it will be upgradeable
+// TODO: initializer cannot be immutable if it will be upgradeable
 
 contract Optimistic_Roll_In {
   event ORI_New_State(address indexed user, bytes32 indexed new_state);
@@ -111,7 +113,10 @@ contract Optimistic_Roll_In {
     bond_amount = msg.value - bond_amount;
 
     // call the initializer, passing any remaining amount
-    (bool success, bytes memory return_bytes) = logic_address.call{ value: bond_amount }(abi.encodePacked(initializer));
+    (bool success, bytes memory return_bytes) = logic_address.call{ value: bond_amount }(
+      abi.encodeWithSelector(initializer, user)
+    );
+
     require(success, "INITIALIZE_FAILED");
 
     // Decode initial state (S_0) from returned bytes
@@ -132,7 +137,14 @@ contract Optimistic_Roll_In {
   }
 
   // Returns true if calling the logic contract with the call data results in new state
-  function verify_transition(bytes calldata call_data, bytes32 new_state) internal returns (bool) {
+  function verify_transition(
+    address user,
+    bytes calldata call_data,
+    bytes32 new_state
+  ) internal returns (bool) {
+    // Check that the user is the user extracted from calldata (20 bytes starting after the function signature)
+    if (user != abi.decode(call_data[4:], (address))) return false;
+
     // Compute a new state
     (bool success, bytes memory state_bytes) = logic_address.call(call_data);
 
@@ -146,18 +158,21 @@ contract Optimistic_Roll_In {
 
   // Calls logic contract and updates account state
   function normal_perform(
-    address user,
+    address caller,
     bytes calldata call_data,
     bytes32 call_data_root,
     uint256 last_time
-  ) internal not_locked(user) {
-    // Extract current state (S_n or S_0) from calldata (32 bytes starting after the function signature)
-    bytes32 state = abi.decode(call_data[4:], (bytes32));
+  ) internal not_locked(caller) {
+    // Check that the caller is the user extracted from calldata (20 bytes starting after the function signature)
+    require(caller == abi.decode(call_data[4:], (address)), "CALLER_USER_MISMATCH");
+
+    // Extract current state (S_n or S_0) from calldata (32 bytes starting after the sig and user)
+    bytes32 state = abi.decode(call_data[36:], (bytes32));
 
     // Check that the user it not in an optimistic state, which means that their account state is
     // an empty call data tree, current state (S_n or S_0), and the last block is 0
     require(
-      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[user],
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[caller],
       "INVALID_ROOTS"
     );
 
@@ -169,9 +184,9 @@ contract Optimistic_Roll_In {
     state = abi.decode(state_bytes, (bytes32));
 
     // Set the account state to an empty call data tree, the new state (S_n+1 or S_1), and last time 0
-    account_states[user] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));
+    account_states[caller] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));
 
-    emit ORI_New_State(user, state);
+    emit ORI_New_State(caller, state);
   }
 
   // Set the account state to the on-chain computed new state, if the account is not locked
@@ -190,20 +205,20 @@ contract Optimistic_Roll_In {
 
   // Updates account state with optimistic transition data
   function optimistic_perform(
-    address user,
+    address caller,
     bytes calldata call_data,
     bytes32 new_state,
     bytes32 call_data_root,
     bytes32[] calldata proof,
     uint256 last_time
-  ) internal not_locked(user) {
-    // Extract current state (S_0) from call data (32 bytes starting after the function signature)
-    bytes32 state = abi.decode(call_data[4:], (bytes32));
+  ) internal not_locked(caller) {
+    // Extract current state (S_0) from call data (32 bytes starting after sig and user)
+    bytes32 state = abi.decode(call_data[36:], (bytes32));
 
     // Check that the user it not in an optimistic state, which means that their account state is
     // an empty call data tree, current state (S_0), and the last block is 0
     require(
-      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[user],
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[caller],
       "INVALID_ROOTS"
     );
 
@@ -211,9 +226,9 @@ contract Optimistic_Roll_In {
     state = Merkle_Library_CBS.try_append_one(call_data_root, call_data, proof);
 
     // Combine call data root, new state (S_1), and current time into account state
-    account_states[user] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
+    account_states[caller] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
 
-    emit ORI_New_Optimistic_State(user, block.timestamp);
+    emit ORI_New_Optimistic_State(caller, block.timestamp);
   }
 
   // Enters optimism by updating the account state optimistically with call data and a new state, if the account is not locked
@@ -245,8 +260,8 @@ contract Optimistic_Roll_In {
     bytes32[] calldata proof,
     uint256 last_time
   ) internal not_locked(user) sufficient_calldata(call_data) {
-    // Extract current state (S_n) from first call data (32 bytes starting after the function signature)
-    bytes32 state = abi.decode(call_data[0][4:], (bytes32));
+    // Extract current state (S_n) from first call data (32 bytes starting after sig and user)
+    bytes32 state = abi.decode(call_data[0][36:], (bytes32));
 
     // Check that the call data root, current state (S_n), and last time are valid for this user
     require(
@@ -368,16 +383,16 @@ contract Optimistic_Roll_In {
       require(transition_index + 1 == uint256(proof[0]), "INCORRECT_CALLDATA");
 
       // Fail if the state transition was valid
-      require(verify_transition(call_data[0], state) == false, "VALID_TRANSITION");
+      require(verify_transition(suspect, call_data[0], state) == false, "VALID_TRANSITION");
     } else {
       // Check that call data provided are consecutive
       require(transition_index + 1 == call_data_indices[1]);
 
-      // Extract new state from second call data (32 bytes starting after the function signature), reusing state var
-      state = abi.decode(call_data[1][4:], (bytes32));
+      // Extract new state from second call data (32 bytes starting after the sig and user), reusing state var
+      state = abi.decode(call_data[1][36:], (bytes32));
 
       // Fail if the state transition was valid
-      require(verify_transition(call_data[0], state) == false, "VALID_TRANSITION");
+      require(verify_transition(suspect, call_data[0], state) == false, "VALID_TRANSITION");
     }
 
     // Take the suspect's bond and give it to the accuser, reusing last_time var
@@ -438,8 +453,8 @@ contract Optimistic_Roll_In {
       "INVALID_ROLLBACK"
     );
 
-    // Extract new state from first rolled back call data (32 bytes starting after the function signature), reusing state var
-    state = abi.decode(rolled_back_call_data[0][4:], (bytes32));
+    // Extract new state from first rolled back call data (32 bytes starting after the sig and user), reusing state var
+    state = abi.decode(rolled_back_call_data[0][36:], (bytes32));
 
     // Combine rolled back call data root, new state (S_n-m), and current time into account state
     account_states[user] = keccak256(abi.encodePacked(rolled_back_call_data_root, state, bytes32(block.timestamp)));
