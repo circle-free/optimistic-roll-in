@@ -188,35 +188,46 @@ class OptimisticRollIn {
     this._frauds[suspect] = OptimisticRollIn.fraudsterFromProof(parameters, options);
   }
 
-  _isValidTransition = (callDataHex, newStateHex) => {
+  _isValidTransition = (suspectHex, callDataHex, newStateHex) => {
     // Decode arg from calldata and compute expected new state
-    const { sighash, current_state: startingStateHex, some_arg: somArgHex } = this._logicDecoder.decodeFn(callDataHex);
+    const { sighash, user, current_state: startingStateHex, some_arg: somArgHex } = this._logicDecoder.decodeFn(
+      callDataHex
+    );
+
+    if (suspectHex.toLowerCase() !== user.toLowerCase()) return false;
 
     const functionName = this._sighashes[sighash];
 
     // TODO: get the function name based off the decoded data and get all args generically somehow
-    const endState = this._functions[functionName](startingStateHex, somArgHex);
+    const endState = this._functions[functionName](user, startingStateHex, somArgHex);
 
     // Fraudulent if the new state computed does not match what was optimistically provided
     return endState.equals(toBuffer(newStateHex));
   };
 
   // PRIVATE: Verifies an optimistic transition, and creates a fraudster ORI if fraud is found
-  _verifyTransition(suspect, decodedOptimismData, lastTime) {
+  _verifyTransition(suspectHex, decodedOptimismData, lastTime) {
     // Decode the optimism input data
     const { call_data: callDataHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
 
-    if (this._isValidTransition(callDataHex, newStateHex)) {
-      return { valid: true, user: suspect };
+    if (this._isValidTransition(suspectHex, callDataHex, newStateHex)) {
+      return { valid: true, user: suspectHex };
     }
 
-    this._recordFraud({ suspect, fraudIndex: 0, callDataArrayHex: [callDataHex], newStateHex, proofHex, lastTime });
+    this._recordFraud({
+      suspect: suspectHex,
+      fraudIndex: 0,
+      callDataArrayHex: [callDataHex],
+      newStateHex,
+      proofHex,
+      lastTime,
+    });
 
-    return { valid: false, user: suspect };
+    return { valid: false, user: suspectHex };
   }
 
   // PRIVATE: Verifies batch optimistic transitions, and creates a fraudster ORI if fraud is found
-  _verifyBatchTransitions(suspect, decodedOptimismData, lastTime) {
+  _verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime) {
     // Decode the optimism input data
     const { call_data: callDataArrayHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
 
@@ -227,14 +238,21 @@ class OptimisticRollIn {
           ? newStateHex
           : this._logicDecoder.decodeFn(callDataArrayHex[i + 1]).current_state;
 
-      if (this._isValidTransition(callDataArrayHex[i], intermediateStateHex)) continue;
+      if (this._isValidTransition(suspectHex, callDataArrayHex[i], intermediateStateHex)) continue;
 
-      this._recordFraud({ suspect, fraudIndex: i, callDataArrayHex, newStateHex, proofHex, lastTime });
+      this._recordFraud({
+        suspect: suspectHex,
+        fraudIndex: i,
+        callDataArrayHex,
+        newStateHex,
+        proofHex,
+        lastTime,
+      });
 
-      return { valid: false, user: suspect };
+      return { valid: false, user: suspectHex };
     }
 
-    return { valid: true, user: suspect };
+    return { valid: true, user: suspectHex };
   }
 
   // PRIVATE: Updates internal account given some new optimistic transition
@@ -285,7 +303,8 @@ class OptimisticRollIn {
 
     // TODO: prevent performing unless out of optimism, or automatically perform and exit
 
-    const callDataHex = await this._getCalldata(this._state.currentState, functionName, args);
+    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
+
     const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress });
 
     this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
@@ -299,7 +318,7 @@ class OptimisticRollIn {
 
     // TODO: prevent performing unless in optimism, or automatically perform non-optimistically
 
-    const callDataHex = await this._getCalldata(this._state.currentState, functionName, args);
+    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
     const result = await this._oriContractInstance.perform_and_exit(
       callDataHex,
@@ -319,10 +338,10 @@ class OptimisticRollIn {
 
     // TODO: prevent performing unless out of optimism, or automatically perform optimistically
 
-    const callDataHex = await this._getCalldata(this._state.currentState, functionName, args);
+    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
     // Compute the new state from the current state, locally
-    const newState = this._functions[functionName](this._state.currentState, ...args);
+    const newState = this._functions[functionName](this._state.user, this._state.currentState, ...args);
 
     // Get the expected new call data tree and append proof
     const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), proofOptions);
@@ -348,10 +367,10 @@ class OptimisticRollIn {
 
     // TODO: prevent performing unless in optimism, or automatically perform and enter
 
-    const callDataHex = await this._getCalldata(this._state.currentState, functionName, args);
+    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
     // Compute the new state from the current state, locally
-    const newState = this._functions[functionName](this._state.currentState, ...args);
+    const newState = this._functions[functionName](this._state.user, this._state.currentState, ...args);
 
     // Get the expected new call data tree and append proof
     const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), proofOptions);
@@ -388,7 +407,7 @@ class OptimisticRollIn {
     let newState = this._state.currentState;
 
     for (let i = 0; i < functionNames.length; i++) {
-      const callDataHex = await this._getCalldata(newState, functionNames[i], args[i]);
+      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
       callDataArray.push(toBuffer(callDataHex));
 
       if (!checkStates) {
@@ -396,7 +415,7 @@ class OptimisticRollIn {
         continue;
       }
 
-      newState = this._functions[functionNames[i]](newState, ...args[i]);
+      newState = this._functions[functionNames[i]](this._state.user, newState, ...args[i]);
 
       assert(newState.equals(newStates[i]), 'New state mismatch.');
     }
@@ -436,7 +455,7 @@ class OptimisticRollIn {
     let newState = this._state.currentState;
 
     for (let i = 0; i < functionNames.length; i++) {
-      const callDataHex = await this._getCalldata(newState, functionNames[i], args[i]);
+      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
       callDataArray.push(toBuffer(callDataHex));
 
       if (!checkStates) {
@@ -493,7 +512,7 @@ class OptimisticRollIn {
     const newStatesLength = this._queue.newStates.length;
     const currentState = newStatesLength ? this._queue.newStates[newStatesLength - 1] : this._state.currentState;
 
-    const newState = this._functions[functionName](currentState, ...args);
+    const newState = this._functions[functionName](this._state.user, currentState, ...args);
 
     this._queue.newStates.push(newState);
     this._queue.functionNames.push(functionName);
@@ -501,10 +520,11 @@ class OptimisticRollIn {
   }
 
   // PRIVATE: Returns call data hex needed to call a function, given the current state and args
-  async _getCalldata(currentState, functionName, args = []) {
+  async _getCalldata(user, currentState, functionName, args = []) {
     // Get the call logic contract address and call data from a logic request
     // TODO: this can and should be done locally and synchronously
     const { data: callDataHex } = await this._logicContractInstance[functionName].request(
+      toHex(user),
       toHex(currentState),
       ...args,
       { from: this._sourceAddress }
@@ -608,6 +628,7 @@ class OptimisticRollIn {
 
     // TODO: search for the correct log (don't assume 0)
     const user = '0x' + receipt.logs[0].topics[1].slice(26);
+
     assert(user === this._state.user, 'User mismatch.');
 
     const lastTime = parseInt(receipt.logs[0].topics[2].slice(2), 16);
@@ -634,13 +655,13 @@ class OptimisticRollIn {
     const receipt = await this._web3.eth.getTransactionReceipt(txId);
 
     // TODO: search for the correct log (don't assume 0)
-    const suspect = '0x' + receipt.logs[0].topics[1].slice(26);
+    const suspectHex = '0x' + receipt.logs[0].topics[1].slice(26);
     const lastTime = parseInt(receipt.logs[0].topics[2].slice(2), 16);
 
     return sighash === '0x08542bb1' || sighash === '0x6a8dddef'
-      ? this._verifyBatchTransitions(suspect, decodedOptimismData, lastTime)
+      ? this._verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime)
       : sighash === '0x177f15c5' || sighash === '0x1646d051'
-      ? this._verifyTransition(suspect, decodedOptimismData, lastTime)
+      ? this._verifyTransition(suspectHex, decodedOptimismData, lastTime)
       : { valid: true };
   }
 
@@ -718,7 +739,7 @@ class OptimisticRollIn {
     // TODO: do not assume logs[0]
     const lastTime = parseInt(result.receipt.logs[0].args[2], 10);
 
-    const currentState = rolledBackCallDataArray[0].slice(4, 36);
+    const currentState = rolledBackCallDataArray[0].slice(36, 68);
     this._updateStateOptimistically(oldCallDataTree, currentState, lastTime);
 
     // TODO: this is weird, because this isn't here for the suspect's own ori instance

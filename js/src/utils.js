@@ -17,6 +17,8 @@ const hash = (buffer) => new Keccak(256).update(buffer).digest();
 const hashPacked = (buffers) => hash(Buffer.concat(buffers));
 
 const toHex = (buffer) => {
+  if (!Buffer.isBuffer(buffer)) return buffer;
+
   if (Array.isArray(buffer)) {
     return buffer.map((b) => toHex(b));
   }
@@ -25,6 +27,8 @@ const toHex = (buffer) => {
 };
 
 const toBuffer = (hex) => {
+  if (Buffer.isBuffer(hex)) return hex;
+
   if (Array.isArray(hex)) {
     return hex.map((h) => toBuffer(h));
   }
