@@ -10,7 +10,7 @@ import "merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-libr
 // TODO: make required bond queryable
 
 contract Optimistic_Roll_In {
-  event ORI_New_State(address indexed user, bytes32 new_state);
+  event ORI_New_State(address indexed user, bytes32 indexed new_state);
   event ORI_New_Optimistic_State(address indexed user, uint256 indexed block_time);
   event ORI_New_Optimistic_States(address indexed user, uint256 indexed block_time);
   event ORI_Locked(address indexed suspect, address indexed accuser);

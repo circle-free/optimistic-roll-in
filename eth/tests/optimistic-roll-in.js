@@ -131,7 +131,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      expect(receipt.gasUsed).to.equal(46437);
+      expect(receipt.gasUsed).to.equal(46487);
     });
 
     it('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
@@ -146,7 +146,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      expect(receipt.gasUsed).to.equal(287798);
+      expect(receipt.gasUsed).to.equal(287848);
     });
 
     it('[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).', async () => {
@@ -490,7 +490,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      expect(receipt.gasUsed).to.equal(289832);
+      expect(receipt.gasUsed).to.equal(289882);
     });
 
     it('[22] allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).', async () => {
