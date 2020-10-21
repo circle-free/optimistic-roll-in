@@ -64,7 +64,6 @@ const advanceTime = (time) => {
   });
 };
 
-const initialStateSelector = '0x1e58e625';
 const zeroAddress = '0x0000000000000000000000000000000000000000';
 
 contract('Optimistic Roll In', (accounts) => {
@@ -77,6 +76,7 @@ contract('Optimistic Roll In', (accounts) => {
     let suspectLastTxId = null;
 
     let suspectBondAmount = null;
+    let suspectDepositAmount = null;
     let accuserBondAmount = null;
 
     let logicContractInstance = null;
@@ -87,6 +87,7 @@ contract('Optimistic Roll In', (accounts) => {
     before(async () => {
       logicContractInstance = await SomeLogicContractArtifact.new();
       logicAddress = logicContractInstance.address;
+      const initialStateSelector = logicContractInstance.abi.find(({ name }) => name === 'initialize_state').signature;
       optimismContractInstance = await OptimisticRollInArtifact.new(logicAddress, initialStateSelector);
 
       const oriOptions = { treeOptions: { elementPrefix: '00' }, web3 };
@@ -111,23 +112,30 @@ contract('Optimistic Roll In', (accounts) => {
     it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
       suspectBondAmount = '1000000000000000000';
       const { receipt } = await suspectOptimist.bond(suspectBondAmount);
-      const balance = await optimismContractInstance.balances(suspect);
+      const bondBalance = await optimismContractInstance.balances(suspect);
 
-      expect(balance.toString()).to.equal(suspectBondAmount);
-      expect(receipt.gasUsed).to.equal(42706);
+      expect(bondBalance.toString()).to.equal(suspectBondAmount);
+      expect(receipt.gasUsed).to.equal(42739);
     });
 
     it('[ 2] can initialize a user (suspect).', async () => {
-      const { receipt, logs } = await suspectOptimist.initialize();
+      suspectDepositAmount = '500000000000000000';
+      const additionalBond = '0';
+      const options = { deposit: suspectDepositAmount, bond: additionalBond };
+      const { receipt, logs } = await suspectOptimist.initialize(options);
       const accountState = await optimismContractInstance.account_states(suspect);
+      const bondBalance = await optimismContractInstance.balances(suspect);
+      const logicBalance = BigInt(await web3.eth.getBalance(logicAddress));
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
+      expect(bondBalance.toString()).to.equal(suspectBondAmount);
+      expect(logicBalance.toString()).to.equal(suspectDepositAmount);
 
       expect(logs[0].event).to.equal('ORI_New_State');
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      expect(receipt.gasUsed).to.equal(46487);
+      expect(receipt.gasUsed).to.equal(53482);
     });
 
     it('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
@@ -142,7 +150,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      expect(receipt.gasUsed).to.equal(287848);
+      expect(receipt.gasUsed).to.equal(287869);
     });
 
     it('[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).', async () => {
@@ -213,7 +221,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      expect(receipt.gasUsed).to.equal(286162);
+      expect(receipt.gasUsed).to.equal(286140);
     });
 
     it('[ 9] allows a user (accuser) to immediately verify valid batched optimistic state transitions.', async () => {
@@ -259,7 +267,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      expect(receipt.gasUsed).to.equal(289241);
+      expect(receipt.gasUsed).to.equal(289219);
     });
 
     it('[11] allows a user (accuser) to immediately detect a transaction containing a fraudulent state transition.', async () => {
@@ -323,7 +331,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      expect(receipt.gasUsed).to.equal(90447);
+      expect(receipt.gasUsed).to.equal(90425);
     });
 
     it("[15] allows a user (accuser) to lock a suspect's account for a time frame.", async () => {
@@ -350,7 +358,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(accuser);
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
 
-      expect(receipt.gasUsed).to.equal(128020);
+      expect(receipt.gasUsed).to.equal(128002);
     });
 
     it("[16] allows a user (accuser) to update their local partial tree with the suspect's pre-lockout valid transition.", async () => {
@@ -401,22 +409,22 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(zeroAddress);
       expect(accuserLockedTime.toString()).to.equal('0');
 
-      expect(receipt.gasUsed).to.equal(298463);
+      expect(receipt.gasUsed).to.equal(298464);
     });
 
-    it('[18] allows a user (accuser) to withdraw their balance (including the reward).', async () => {
+    it('[18] allows a user (accuser) to unbond their balance (including the reward).', async () => {
       const startingEth = BigInt(await web3.eth.getBalance(accuser));
-      const { receipt } = await accuserOptimist.withdraw(accuser);
+      const { receipt } = await accuserOptimist.unbond(accuser);
       const endingEth = BigInt(await web3.eth.getBalance(accuser));
       const balanceUser0 = await optimismContractInstance.balances(suspect);
       const balanceUser1 = await optimismContractInstance.balances(accuser);
 
       accuserBondAmount = '0';
 
-      expect((endingEth - startingEth).toString()).to.equal('1999578880000000000');
+      expect((endingEth - startingEth).toString()).to.equal('1999578460000000000');
       expect(balanceUser0.toString()).to.equal('0');
       expect(balanceUser1.toString()).to.equal('0');
-      expect(receipt.gasUsed).to.equal(21056);
+      expect(receipt.gasUsed).to.equal(21077);
     });
 
     it('[19] allows a user (suspect) to rollback their call data tree.', async () => {
@@ -442,7 +450,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      expect(receipt.gasUsed).to.equal(296929);
+      expect(receipt.gasUsed).to.equal(296934);
     });
 
     it('[20] allows a user (suspect) to re-perform valid optimistic state transitions in batch.', async () => {
@@ -468,7 +476,7 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      expect(receipt.gasUsed).to.equal(290505);
+      expect(receipt.gasUsed).to.equal(290483);
     });
 
     it('[21] allows a user (suspect) to perform a normal state transition (and exit optimism).', async () => {

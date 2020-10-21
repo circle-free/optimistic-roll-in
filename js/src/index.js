@@ -531,12 +531,15 @@ class OptimisticRollIn {
   }
 
   // PUBLIC: Initialize the on-chain account and the internal state (only for self)
-  async initialize() {
+  async initialize(options = {}) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
 
     // TODO: prevent initializing already initialized account
 
-    const result = await this._oriContractInstance.initialize({ from: this._sourceAddress });
+    const { deposit, bond } = options;
+    const value = (BigInt(deposit) + BigInt(bond)).toString();
+    const callOptions = { value, from: this._sourceAddress };
+    const result = await this._oriContractInstance.initialize(bond, callOptions);
 
     this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
 
@@ -641,6 +644,7 @@ class OptimisticRollIn {
       : { valid: true };
   }
 
+  // PUBLIC: Submit proof to ORI contract that account user committed fraud
   async proveFraud() {
     // Build a Multi Proof for the call data of the fraudulent transition
     const indices = [this._state.fraudIndex, this._state.fraudIndex + 1];
@@ -667,14 +671,17 @@ class OptimisticRollIn {
     return result;
   }
 
+  // PUBLIC: Delete internal fraudster object
   deleteFraudster(user) {
     this._frauds[user] = null;
   }
 
-  withdraw(destination) {
-    return this._oriContractInstance.withdraw(destination, { from: this._sourceAddress });
+  // PUBLIC: Unbonds the user's account to some destination
+  unbond(destination) {
+    return this._oriContractInstance.unbond(destination, { from: this._sourceAddress });
   }
 
+  // PUBLIC: Rollback optimistic state (and thus calldata tree) to right before the fraud index
   async rollback(fraudIndex, options = {}) {
     const { bondAmount = '0' } = options;
 
@@ -718,6 +725,11 @@ class OptimisticRollIn {
     this._state.fraudIndex = null;
 
     return result;
+  }
+
+  // GETTER: Returns the account user's balance
+  getBalance() {
+    return optimismContractInstance.balances(this._state.user);
   }
 }
 

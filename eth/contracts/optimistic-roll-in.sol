@@ -74,16 +74,20 @@ contract Optimistic_Roll_In {
     _;
   }
 
+  // Fallback to receive ETH and bond msg.value for msg.sender
   receive() external payable {
-    bond(msg.sender);
+    apply_bond(msg.sender, msg.value);
   }
 
-  // Bonds msg.value, and reverts if resulting balance less than 1 ETH
-  function bond(address user) public payable {
-    uint256 amount = msg.value;
-
+  // Bonds amount for user, and reverts if resulting balance less than 1 ETH
+  function apply_bond(address user, uint256 amount) internal {
     if (amount == 0) {
       require(balances[user] >= 1000000000000000000, "INSUFFICIENT_BOND");
+      return;
+    }
+
+    if (amount >= 1000000000000000000) {
+      balances[user] += amount;
       return;
     }
 
@@ -91,12 +95,23 @@ contract Optimistic_Roll_In {
     require(balances[user] >= 1000000000000000000, "INSUFFICIENT_BOND");
   }
 
-  // Sets user's account state to starting point, and bonds msg.value
-  function initialize() external payable not_initialized(msg.sender) {
-    address user = msg.sender;
-    bond(user);
+  // Bonds msg.value for user
+  function bond(address user) public payable {
+    apply_bond(user, msg.value);
+  }
 
-    (bool success, bytes memory return_bytes) = logic_address.call{ value: msg.value }(abi.encodePacked(initializer));
+  // Sets user's account state to starting point, and bonds msg.value
+  function initialize(uint256 bond_amount) external payable not_initialized(msg.sender) {
+    require(bond_amount <= msg.value, "INVALID_BOND");
+
+    address user = msg.sender;
+    apply_bond(user, bond_amount);
+
+    // reuse bond_amount as value being sent to initializer
+    bond_amount = msg.value - bond_amount;
+
+    // call the initializer, passing any remaining amount
+    (bool success, bytes memory return_bytes) = logic_address.call{ value: bond_amount }(abi.encodePacked(initializer));
     require(success, "INITIALIZE_FAILED");
 
     // Decode initial state (S_0) from returned bytes
@@ -109,7 +124,7 @@ contract Optimistic_Roll_In {
   }
 
   // Allows unbonding of ETH if account not locked
-  function withdraw(address payable destination) public not_locked(msg.sender) {
+  function unbond(address payable destination) public not_locked(msg.sender) {
     address user = msg.sender;
     uint256 amount = balances[user];
     balances[user] = 0;
@@ -280,7 +295,7 @@ contract Optimistic_Roll_In {
     locked_times[accuser] = block.timestamp;
 
     // The accuser may be trying to bond at the same time (this also check that have enough bonded)
-    bond(accuser);
+    apply_bond(accuser, msg.value);
 
     emit ORI_Locked(suspect, accuser);
   }
@@ -436,7 +451,7 @@ contract Optimistic_Roll_In {
     }
 
     // The user may be trying to bond at the same time (this also check that have enough bonded)
-    bond(user);
+    apply_bond(user, msg.value);
 
     emit ORI_Rolled_Back(user, rolled_back_size, block.timestamp);
   }

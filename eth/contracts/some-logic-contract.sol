@@ -6,7 +6,8 @@ pragma experimental ABIEncoderV2;
 // TODO: Build a Logic Proxy that checks and embeds the version of the state, and directs to other contracts
 
 contract Some_Logic_Contract {
-  function get_initial_state() external pure returns (bytes32) {
+  function initialize_state() external payable returns (bytes32) {
+    require(msg.value >= 500000000000000000, "INSUFFICIENT_DEPOSIT");
     return bytes32(0);
   }
 
