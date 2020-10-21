@@ -2,7 +2,7 @@
   "name": "optimistic-roll-in",
   "version": "0.0.2",
   "description": "Layer-Agnostic Optimistic Roll-Ins - A Proof of Concept.",
-  "main": "/js/src/index.js",
+  "main": "js/src/index.js",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/circle-free/optimistic-roll-in.git"
@@ -16,8 +16,8 @@
     "solidity"
   ],
   "scripts": {
-    "test": "mocha 'js/tests' && truffle test",
-    "test-eth": "truffle test",
+    "test": "truffle compile && mocha 'js/tests' && truffle test",
+    "test-eth": "truffle compile && truffle test",
     "test-js": "mocha 'js/tests'",
     "ganache": "ganache-cli",
     "lint-eth": "solhint 'eth/contracts/**/*.sol'",

@@ -4,14 +4,13 @@ pragma solidity >=0.6.0 <=0.7.3;
 pragma experimental ABIEncoderV2;
 
 import "merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-library.sol";
-import "./some-logic-contract.sol";
 
 // TODO: perhaps a owner-controlled sighash whitelist for optimistically performing, and therefore a non-performing exit method
 // TODO: consider verifying being view, or some kind of forced "come up for air" mechanism
 // TODO: make required bond queryable
 
 contract Optimistic_Roll_In {
-  event ORI_Initialized(address indexed user, bytes32 indexed initial_state);
+  event ORI_New_State(address indexed user, bytes32 indexed new_state);
   event ORI_New_Optimistic_State(address indexed user, uint256 indexed block_time);
   event ORI_New_Optimistic_States(address indexed user, uint256 indexed block_time);
   event ORI_Locked(address indexed suspect, address indexed accuser);
@@ -23,7 +22,6 @@ contract Optimistic_Roll_In {
     uint256 amount
   );
   event ORI_Rolled_Back(address indexed user, uint256 indexed tree_size, uint256 indexed block_time);
-  event ORI_Exited_Optimism(address indexed user);
 
   address public immutable logic_address;
   bytes4 public immutable initializer;
@@ -107,7 +105,7 @@ contract Optimistic_Roll_In {
     // Set account state to combination of empty call data tree, initial state (S_0), and last time of 0 (not in optimism)
     account_states[user] = keccak256(abi.encodePacked(bytes32(0), initial_state, bytes32(0)));
 
-    emit ORI_Initialized(user, initial_state);
+    emit ORI_New_State(user, initial_state);
   }
 
   // Allows unbonding of ETH if account not locked
@@ -157,6 +155,8 @@ contract Optimistic_Roll_In {
 
     // Set the account state to an empty call data tree, the new state (S_n+1 or S_1), and last time 0
     account_states[user] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));
+
+    emit ORI_New_State(user, state);
   }
 
   // Set the account state to the on-chain computed new state, if the account is not locked
@@ -171,8 +171,6 @@ contract Optimistic_Roll_In {
     uint256 last_time
   ) external payable no_rollback_required(msg.sender) can_exit_optimism(last_time) {
     normal_perform(msg.sender, call_data, call_data_root, last_time);
-
-    emit ORI_Exited_Optimism(msg.sender);
   }
 
   // Updates account state with optimistic transition data

@@ -155,17 +155,10 @@ class OptimisticRollIn {
     return this._queue.newStates.length;
   }
 
-  // PRIVATE: Initializes the state with empty call data tree, initial state, and 0 last optimistic time
-  _initializeState() {
-    this._state.callDataTree = new MerkleTree([], this._treeOptions);
-    this._state.currentState = this._functions['get_initial_state']({ address: this._state.user });
-    this._state.lastTime = 0;
-  }
-
   // PRIVATE: Updates the state with empty call data tree, computed new state, and 0 last optimistic time
-  _updateStatePessimistically(functionName, args) {
+  _updateStatePessimistically(newState) {
     this._state.callDataTree = new MerkleTree([], this._treeOptions);
-    this._state.currentState = this._functions[functionName](this._state.currentState, ...args);
+    this._state.currentState = newState;
     this._state.lastTime = 0;
   }
 
@@ -294,7 +287,8 @@ class OptimisticRollIn {
 
     const callDataHex = await this._getCalldata(this._state.currentState, functionName, args);
     const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress });
-    this._updateStatePessimistically(functionName, args);
+
+    this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
 
     return result;
   }
@@ -314,7 +308,7 @@ class OptimisticRollIn {
       { from: this._sourceAddress }
     );
 
-    this._updateStatePessimistically(functionName, args);
+    this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
 
     return result;
   }
@@ -543,7 +537,8 @@ class OptimisticRollIn {
     // TODO: prevent initializing already initialized account
 
     const result = await this._oriContractInstance.initialize({ from: this._sourceAddress });
-    this._initializeState();
+
+    this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
 
     return result;
   }
