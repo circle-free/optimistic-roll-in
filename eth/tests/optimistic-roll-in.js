@@ -73,6 +73,10 @@ const advanceTime = (time) => {
   });
 };
 
+const someDelay = (seconds) => {
+  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+};
+
 contract('Optimistic Roll In', (accounts) => {
   describe('Basic Testing (must be performed in order)', async () => {
     let suspect = accounts[0];
@@ -93,12 +97,9 @@ contract('Optimistic Roll In', (accounts) => {
     let fraudulentTransitionIndex = null;
 
     before(async () => {
-      logicContractInstance = await SomeLogicContractArtifact.new();
+      logicContractInstance = await SomeLogicContractArtifact.deployed();
       logicAddress = logicContractInstance.address;
-
-      const initialStateSelector = logicContractInstance.abi.find(({ name }) => name === 'initialize_state').signature;
-
-      optimismContractInstance = await OptimisticRollInArtifact.new(logicAddress, initialStateSelector);
+      optimismContractInstance = await OptimisticRollInArtifact.deployed();
       optimismAddress = optimismContractInstance.address;
 
       const oriOptions = { treeOptions: { elementPrefix: '00' }, web3 };
@@ -109,7 +110,8 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
-      suspectBondAmount = '1000000000000000000';
+      suspectBondAmount = (await web3.eth.net.getId()) === 5777 ? '1000000000000000000' : '10000000000000';
+
       const { receipt } = await suspectOptimist.bond(suspectBondAmount);
       const bondBalance = await suspectOptimist.getBalance();
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
@@ -117,8 +119,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(bondBalance.toString()).to.equal(suspectBondAmount);
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
 
-      if (receipt.gasUsed !== 42739) {
-        console.log(`Not Critical, but we expected gas used for [ 1] to be 42739, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 42761) {
+        console.log(`Not Critical, but we expected gas used for [ 1] to be 42761, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -159,8 +161,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      if (receipt.gasUsed !== 289277) {
-        console.log(`Not Critical, but we expected gas used for [ 3] to be 289277, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 289299) {
+        console.log(`Not Critical, but we expected gas used for [ 3] to be 289299, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -179,8 +181,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 34351) {
-        console.log(`Not Critical, but we expected gas used for [ 4] to be 34351, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 34373) {
+        console.log(`Not Critical, but we expected gas used for [ 4] to be 34373, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -320,8 +322,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 38663) {
-        console.log(`Not Critical, but we expected gas used for [ 12] to be 38663, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 38640) {
+        console.log(`Not Critical, but we expected gas used for [ 12] to be 38640, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -366,7 +368,8 @@ contract('Optimistic Roll In', (accounts) => {
 
     it("[15] allows a user (accuser) to lock a suspect's account for a time frame.", async () => {
       // An accuser, who previously detected the fraudulent transition will, will lock out the suspect (and bond themselves at the same time)
-      accuserBondAmount = '1000000000000000000';
+      accuserBondAmount = (await web3.eth.net.getId()) === 5777 ? '1000000000000000000' : '10000000000000';
+
       const fraudster = accuserOptimist.getFraudster(suspect);
       const { receipt, logs } = await fraudster.lock({ bond: accuserBondAmount });
 
@@ -388,8 +391,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(accuser);
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
 
-      if (receipt.gasUsed !== 128002) {
-        console.log(`Not Critical, but we expected gas used for [ 15] to be 128002, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 128024) {
+        console.log(`Not Critical, but we expected gas used for [ 15] to be 128024, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -455,6 +458,10 @@ contract('Optimistic Roll In', (accounts) => {
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
 
       accuserBondAmount = '0';
+      let expectedBalance = null;
+
+      // I guess negative here for public since bond/reward is cheaper than proof cost
+      expectedBalance = (await web3.eth.net.getId()) === 5777 ? '1999578440000000000' : '-1078000000000';
 
       expect((endingEth - startingEth).toString()).to.equal('1999578460000000000');
       expect(accuserBalance.toString()).to.equal('0');
@@ -467,7 +474,7 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[19] allows a user (suspect) to rollback their call data tree.', async () => {
-      suspectBondAmount = '1000000000000000000';
+      suspectBondAmount = (await web3.eth.net.getId()) === 5777 ? '1000000000000000000' : '10000000000000';
 
       const rollbackOptions = { bondAmount: suspectBondAmount };
       const { receipt, logs } = await suspectOptimist.rollback(rollbackOptions);
@@ -529,8 +536,17 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[21] allows a user (suspect) to perform a normal state transition (and exit optimism).', async () => {
-      // Need to increase time by at least 600 seconds for this to be allowed
-      await advanceTime(suspectOptimist.lastTime + 700);
+      const networkId = await web3.eth.net.getId();
+
+      if (networkId === 5777) {
+        // Need to increase time by at least 600 seconds for this to be allowed
+        await advanceTime(suspectOptimist.lastTime + 700);
+      } else {
+        // Need to wait at least 60 seconds for lock time to expire
+        console.info('Waiting for 70 seconds...');
+        await someDelay(70);
+        console.info('Finished waiting.');
+      }
 
       const someArg = generateElements(1, { seed: '88' })[0];
 
@@ -574,8 +590,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 166874) {
-        console.log(`Not Critical, but we expected gas used for [ 22] to be 166874, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 166850) {
+        console.log(`Not Critical, but we expected gas used for [ 22] to be 166850, but got ${receipt.gasUsed}`);
       }
     });
   });

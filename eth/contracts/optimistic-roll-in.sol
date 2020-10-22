@@ -27,6 +27,8 @@ contract Optimistic_Roll_In {
 
   address public immutable logic_address;
   bytes4 public immutable initializer;
+  uint256 public immutable lock_time;
+  uint256 public immutable min_bond;
 
   mapping(address => uint256) public balances;
   mapping(address => bytes32) public account_states;
@@ -34,9 +36,16 @@ contract Optimistic_Roll_In {
   mapping(address => uint256) public locked_times;
   mapping(address => uint256) public rollback_sizes;
 
-  constructor(address _logic_address, bytes4 _initializer) {
+  constructor(
+    address _logic_address,
+    bytes4 _initializer,
+    uint256 _lock_time,
+    uint256 _min_bond
+  ) {
     logic_address = _logic_address;
-    initializer = _initializer; //1e58e625
+    initializer = _initializer;
+    lock_time = _lock_time;
+    min_bond = _min_bond;
   }
 
   modifier not_initialized(address user) {
@@ -61,7 +70,7 @@ contract Optimistic_Roll_In {
 
   modifier can_exit_optimism(uint256 last_time) {
     // Check that enough time has elapsed for potential fraud proofs (10 minutes)
-    require(last_time + 600 < block.timestamp, "INSUFFICIENT_TIME");
+    require(last_time + lock_time < block.timestamp, "INSUFFICIENT_TIME");
     _;
   }
 
@@ -72,7 +81,7 @@ contract Optimistic_Roll_In {
   }
 
   modifier lock_expired(address user) {
-    require(locked_times[user] + 600 <= block.timestamp, "INSUFFICIENT_WINDOW");
+    require(locked_times[user] + lock_time <= block.timestamp, "INSUFFICIENT_WINDOW");
     _;
   }
 
@@ -84,7 +93,7 @@ contract Optimistic_Roll_In {
   // Bonds amount for user, and reverts if resulting balance less than 1 ETH
   function apply_bond(address user, uint256 amount) internal {
     if (amount == 0) {
-      require(balances[user] >= 1000000000000000000, "INSUFFICIENT_BOND");
+      require(balances[user] >= min_bond, "INSUFFICIENT_BOND");
       return;
     }
 
@@ -94,7 +103,7 @@ contract Optimistic_Roll_In {
     }
 
     balances[user] += amount;
-    require(balances[user] >= 1000000000000000000, "INSUFFICIENT_BOND");
+    require(balances[user] >= min_bond, "INSUFFICIENT_BOND");
   }
 
   // Bonds msg.value for user
