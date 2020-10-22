@@ -7,6 +7,13 @@ const { to32ByteBuffer, hashPacked, toHex, toBuffer } = require('./utils');
 const proofOptions = { compact: true, simple: true };
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ORI_Fraud_Proven = '0xa66290bc21cee2ba1a3c6ba2cac21d24511cea1f9ed7efe453736f24fd894886';
+const ORI_Locked = '0x8773bde6581ad6ddd421210de867340039fb65ce3df41edba7b5de6d24ae7a51';
+const ORI_New_Optimistic_State = '0x4779c4b07abff82b16061ec9a47d081e7f4981c29088395cdb7ff87e322cbbc6';
+const ORI_New_Optimistic_States = '0x0b87b136840d19f5f25329273082c00833265a189b70137e06df6315ddc7839e';
+const ORI_New_State = '0x0f5025cc4f20aa47a346d1b7d9da6ba8c68cc8e83b75e813da4b4490d55365ae';
+const ORI_Rolled_Back = '0x4d7ed8c49e6b03daee23a18f4bd14bd7e4628e5ed54c57bf84407a693867eca9';
+const ORI_Unlocked = '0x524512344e535e9bda79e916c2ea8c7b9e5d23d83e1b95181d7622b4ac3d4293';
 
 class OptimisticRollIn {
   constructor(oriInstance, logicInstance, functions, accountAddress, options = {}) {
@@ -309,7 +316,9 @@ class OptimisticRollIn {
 
     const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress, value });
 
-    this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_State');
+
+    this._updateStatePessimistically(toBuffer(oriLog.args[1]));
 
     return result;
   }
@@ -329,7 +338,9 @@ class OptimisticRollIn {
       { from: this._sourceAddress, value }
     );
 
-    this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_State');
+
+    this._updateStatePessimistically(toBuffer(oriLog.args[1]));
 
     return result;
   }
@@ -353,8 +364,9 @@ class OptimisticRollIn {
       { from: this._sourceAddress }
     );
 
-    // TODO: do not assume logs[0]
-    const lastTime = parseInt(result.receipt.logs[0].args[1], 10);
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_Optimistic_State');
+
+    const lastTime = parseInt(oriLog.args[1], 10);
 
     this._updateStateOptimistically(newMerkleTree, newState, lastTime);
 
@@ -382,8 +394,9 @@ class OptimisticRollIn {
       { from: this._sourceAddress }
     );
 
-    // TODO: do not assume logs[0]
-    const lastTime = parseInt(result.receipt.logs[0].args[1], 10);
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_Optimistic_State');
+
+    const lastTime = parseInt(oriLog.args[1], 10);
 
     this._updateStateOptimistically(newMerkleTree, newState, lastTime);
 
@@ -428,8 +441,9 @@ class OptimisticRollIn {
       { from: this._sourceAddress }
     );
 
-    // TODO: do not assume logs[0]
-    const lastTime = parseInt(result.receipt.logs[0].args[1], 10);
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_Optimistic_States');
+
+    const lastTime = parseInt(oriLog.args[1], 10);
 
     this._updateStateOptimistically(newMerkleTree, newState, lastTime);
 
@@ -472,8 +486,9 @@ class OptimisticRollIn {
       { from: this._sourceAddress }
     );
 
-    // TODO: do not assume logs[0]
-    const lastTime = parseInt(result.receipt.logs[0].args[1], 10);
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_Optimistic_States');
+
+    const lastTime = parseInt(oriLog.args[1], 10);
 
     this._updateStateOptimistically(newMerkleTree, newState, lastTime);
 
@@ -546,7 +561,9 @@ class OptimisticRollIn {
     const callOptions = { value, from: this._sourceAddress };
     const result = await this._oriContractInstance.initialize(bond, callOptions);
 
-    this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_State');
+
+    this._updateStatePessimistically(toBuffer(oriLog.args[1]));
 
     return result;
   }
@@ -611,12 +628,15 @@ class OptimisticRollIn {
     // Pull the transaction receipt containing the suspected fraudulent transition's logs
     const receipt = await this._web3.eth.getTransactionReceipt(txId);
 
-    // TODO: search for the correct log (don't assume 0)
-    const user = '0x' + receipt.logs[0].topics[1].slice(26);
+    const oriLog = receipt.logs.find(({ topics }) =>
+      [ORI_New_Optimistic_State, ORI_New_Optimistic_States].includes(topics[0])
+    );
+
+    const user = '0x' + oriLog.topics[1].slice(26);
 
     assert(user === this._state.user, 'User mismatch.');
 
-    const lastTime = parseInt(receipt.logs[0].topics[2].slice(2), 16);
+    const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
 
     if (sighash === '0x08542bb1' || sighash === '0x6a8dddef') {
       return this._updateWithBatchTransitions(decodedOptimismData, lastTime);
@@ -639,9 +659,12 @@ class OptimisticRollIn {
     // Pull the transaction receipt containing the suspected fraudulent transition's logs
     const receipt = await this._web3.eth.getTransactionReceipt(txId);
 
-    // TODO: search for the correct log (don't assume 0)
-    const suspectHex = '0x' + receipt.logs[0].topics[1].slice(26);
-    const lastTime = parseInt(receipt.logs[0].topics[2].slice(2), 16);
+    const oriLog = receipt.logs.find(({ topics }) =>
+      [ORI_New_Optimistic_State, ORI_New_Optimistic_States].includes(topics[0])
+    );
+
+    const suspectHex = '0x' + oriLog.topics[1].slice(26);
+    const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
 
     return sighash === '0x08542bb1' || sighash === '0x6a8dddef'
       ? this._verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime)
@@ -721,8 +744,9 @@ class OptimisticRollIn {
       { value: bondAmount, from: this._sourceAddress }
     );
 
-    // TODO: do not assume logs[0]
-    const lastTime = parseInt(result.receipt.logs[0].args[2], 10);
+    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_Rolled_Back');
+
+    const lastTime = parseInt(oriLog.args[2], 10);
 
     const currentState = rolledBackCallDataArray[0].slice(36, 68);
     this._updateStateOptimistically(oldCallDataTree, currentState, lastTime);
