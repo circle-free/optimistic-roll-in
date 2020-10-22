@@ -38,8 +38,6 @@ class OptimisticRollIn {
 
     this._oriContractInstance = oriInstance;
     this._logicContractInstance = logicInstance;
-    // logicInstance.methods is object where keys are human readable function signatures
-    // logicInstance.address
 
     this._sighashes = {};
 
@@ -201,10 +199,17 @@ class OptimisticRollIn {
 
     if (suspectHex.toLowerCase() !== user.toLowerCase()) return false;
 
-    const actualNewState = await this._logicContractInstance.call(callDataHex);
+    const callObject = { to: this._logicContractInstance.address , data: callDataHex };
 
-    // Fraudulent if the new state computed does not match what was optimistically provided
-    return actualNewState === newStateHex;
+    try {
+      // Fraudulent if the new state computed does not match what was optimistically provided
+      return (await this._web3.eth.call(callObject)) === newStateHex;
+    } catch (err) {
+      console.log(err);
+      console.log(err.message);
+    }
+
+    return false;
   }
 
   // PRIVATE: Verifies an optimistic transition, and creates a fraudster ORI if fraud is found

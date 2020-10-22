@@ -26,10 +26,6 @@ const someFraudTransition = (_user, _currentState, _argHex) => {
   return to32ByteBuffer(1337);
 };
 
-const logicFunctions = {
-  some_pure_transition: somePureTransition,
-};
-
 const generateRandomElement = () => {
   return crypto.randomBytes(32);
 };
@@ -172,7 +168,9 @@ contract('Optimistic Roll In', (accounts) => {
       const someArg = generateElements(1, { seed: '22' })[0];
 
       const callArgs = [toHex(someArg)];
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs);
+      const newState = somePureTransition(suspect, suspectOptimist.currentState, someArg);
+
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState);
       const accountState = await suspectOptimist.getAccountState();
       suspectLastTxId = receipt.transactionHash;
 
@@ -194,7 +192,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(user).to.equal(suspect.toLowerCase());
     });
 
-    it('[ 6] allows a user (suspect) to perform a valid optimistic state transition.', async () => {
+    it.only('[ 6] allows a user (suspect) to perform a valid optimistic state transition.', async () => {
       const someArg = generateElements(1, { seed: '33' })[0];
 
       const callArgs = [toHex(someArg)];
