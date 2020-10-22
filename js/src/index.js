@@ -41,12 +41,12 @@ class OptimisticRollIn {
 
       this._sighashes[signature] = name;
 
-      const functionSet = { normal: (...args) => this._pessimisticCall(name, args) };
+      const functionSet = { normal: (args, options) => this._pessimisticCall(name, args, options) };
 
       if (stateMutability === 'pure' || stateMutability === 'view') {
         Object.assign(functionSet, {
-          optimistic: (...args) => this._optimisticCall(name, args),
-          queue: (...args) => this._queueCall(name, args),
+          optimistic: (args) => this._optimisticCall(name, args),
+          queue: (args) => this._queueCall(name, args),
         });
       }
 
@@ -300,12 +300,14 @@ class OptimisticRollIn {
   }
 
   // PRIVATE: Non-optimistically perform a transition, and update internal state (only for self)
-  async _performPessimistically(functionName, args = []) {
+  async _performPessimistically(functionName, args = [], options = {}) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
+
+    const { value = '0' } = options;
 
     const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
-    const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress });
+    const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress, value });
 
     this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
 
@@ -313,8 +315,10 @@ class OptimisticRollIn {
   }
 
   // PRIVATE: Non-optimistically perform a transition to exit optimistic state, and update internal state (only for self)
-  async _performPessimisticallyWhileExitingOptimism(functionName, args = []) {
+  async _performPessimisticallyWhileExitingOptimism(functionName, args = [], options = {}) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
+
+    const { value = '0' } = options;
 
     const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
@@ -322,7 +326,7 @@ class OptimisticRollIn {
       callDataHex,
       toHex(this._state.callDataTree.root),
       this._state.lastTime,
-      { from: this._sourceAddress }
+      { from: this._sourceAddress, value }
     );
 
     this._updateStatePessimistically(toBuffer(result.logs[0].args[1]));
@@ -477,19 +481,19 @@ class OptimisticRollIn {
   }
 
   // PRIVATE: performs a non-optimistic contract call, on-chain
-  async _pessimisticCall(functionName, args = []) {
+  async _pessimisticCall(functionName, args, options) {
     // if in optimism and can't exit yet, throw
     assert(this.isInOptimisticState || (await this.canExit()), 'In optimistic state and cannot yet exit.');
 
     // if in optimism and can exit, perform and exit
-    if (this.isInOptimisticState) return this._performPessimisticallyWhileExitingOptimism(functionName, args);
+    if (this.isInOptimisticState) return this._performPessimisticallyWhileExitingOptimism(functionName, args, options);
 
     // if not in optimism, perform
-    return this._performPessimistically(functionName, args);
+    return this._performPessimistically(functionName, args, options);
   }
 
   // PRIVATE: performs an optimistic contract call, on-chain
-  _optimisticCall(functionName, args = []) {
+  _optimisticCall(functionName, args) {
     // if not in optimism, perform and enter
     if (!this.isInOptimisticState) return this._performOptimisticallyWhileEnteringOptimism(functionName, args);
 
@@ -550,7 +554,7 @@ class OptimisticRollIn {
   // PUBLIC: Rolls the entire transition queue into a single transaction and broadcasts (only for self)
   async sendQueue(options = {}) {
     const { checkStates = true } = options;
-    const performOptions = { checkStates };
+    const batchOptions = { checkStates };
 
     // if in optimism, perform optimistically, else, perform and enter
     const result = this.isInOptimisticState
@@ -558,13 +562,13 @@ class OptimisticRollIn {
           this._queue.newStates,
           this._queue.functionNames,
           this._queue.args,
-          performOptions
+          batchOptions
         )
       : await this._performBatchOptimisticallyWhileEnteringOptimism(
           this._queue.newStates,
           this._queue.functionNames,
           this._queue.args,
-          performOptions
+          batchOptions
         );
 
     this.clearQueue();
