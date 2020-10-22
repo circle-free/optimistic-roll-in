@@ -25,7 +25,7 @@ class OptimisticRollIn {
       web3,
       parentORI,
     } = options;
-    
+
     const { elementPrefix = '00' } = treeOptions;
 
     assert(web3, 'web3 option is mandatory for now.');
@@ -39,12 +39,8 @@ class OptimisticRollIn {
     this._oriContractInstance = oriInstance;
     this._logicContractInstance = logicInstance;
 
-    this._sighashes = {};
-
     logicInstance.abi.forEach(({ name, type, signature, stateMutability }) => {
       if (type !== 'function') return;
-
-      this._sighashes[signature] = name;
 
       const functionSet = { normal: (args, options) => this._pessimisticCall(name, args, options) };
 
@@ -105,7 +101,7 @@ class OptimisticRollIn {
       parentORI,
     };
 
-    const fraudster = new OptimisticRollIn(oriInstance, logicInstance, functions, suspect, oriOptions);
+    const fraudster = new OptimisticRollIn(oriInstance, logicInstance, suspect, oriOptions);
 
     // Build a partial merkle tree (for the call data) from the proof data pulled from this transaction
     const appendProof = { appendElements: toBuffer(callDataArrayHex), compactProof: toBuffer(proofHex) };
@@ -127,6 +123,12 @@ class OptimisticRollIn {
   // GETTER: Returns the current state of the account's data
   get currentState() {
     return this._state.currentState;
+  }
+
+  // GETTER: Returns the current state of the account's data
+  get queuedState() {
+    const queueLength = this._queue.newStates.length;
+    return queueLength ? this._queue.newStates[queueLength - 1] : this._state.currentState;
   }
 
   // GETTER: Returns the last optimistic time of the account
@@ -193,16 +195,22 @@ class OptimisticRollIn {
     this._frauds[suspect] = OptimisticRollIn.fraudsterFromProof(parameters, options);
   }
 
-  async _isValidTransition(suspectHex, callDataHex, newStateHex) {
-    // Decode user from calldata
-    const { user } = this._logicDecoder.decodeFn(callDataHex);
+  async _isValidTransition(suspectHex, callDataHex, newStateHex, options = {}) {
+    const { pureVerifiers } = options;
 
+    // Decode sighash and use from calldata
+    const decodedCallData = this._logicDecoder.decodeFn(callDataHex);
+    const { sighash, user } = decodedCallData;
+
+    // If the user extracted from the calldata does not match, its invalid
     if (suspectHex.toLowerCase() !== user.toLowerCase()) return false;
 
-    const callObject = { to: this._logicContractInstance.address , data: callDataHex };
-
     try {
-      // Fraudulent if the new state computed does not match what was optimistically provided
+      // If a pure function was provided to compute this locally, then use it
+      if (pureVerifiers?.[sighash]) return toHex(pureVerifiers[sighash](decodedCallData, newStateHex));
+
+      // If not, we ned to verify against with the node, which is slower
+      const callObject = { to: this._logicContractInstance.address, data: callDataHex };
       return (await this._web3.eth.call(callObject)) === newStateHex;
     } catch (err) {
       console.log(err);
@@ -213,11 +221,11 @@ class OptimisticRollIn {
   }
 
   // PRIVATE: Verifies an optimistic transition, and creates a fraudster ORI if fraud is found
-  async _verifyTransition(suspectHex, decodedOptimismData, lastTime) {
+  async _verifyTransition(suspectHex, decodedOptimismData, lastTime, options) {
     // Decode the optimism input data
     const { call_data: callDataHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
 
-    if (await this._isValidTransition(suspectHex, callDataHex, newStateHex)) {
+    if (await this._isValidTransition(suspectHex, callDataHex, newStateHex, options)) {
       return { valid: true, user: suspectHex };
     }
 
@@ -234,7 +242,7 @@ class OptimisticRollIn {
   }
 
   // PRIVATE: Verifies batch optimistic transitions, and creates a fraudster ORI if fraud is found
-  async _verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime) {
+  async _verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime, options) {
     // Decode the optimism input data
     const { call_data: callDataArrayHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
 
@@ -245,7 +253,7 @@ class OptimisticRollIn {
           ? newStateHex
           : this._logicDecoder.decodeFn(callDataArrayHex[i + 1]).current_state;
 
-      if (await this._isValidTransition(suspectHex, callDataArrayHex[i], intermediateStateHex)) continue;
+      if (await this._isValidTransition(suspectHex, callDataArrayHex[i], intermediateStateHex, options)) continue;
 
       this._recordFraud({
         suspect: suspectHex,
@@ -613,7 +621,7 @@ class OptimisticRollIn {
   }
 
   // PUBLIC: Verifies the transitions(s) of an optimistic tx, and creates a fraudster ORI if fraud is found
-  async verifyTransaction(txId) {
+  async verifyTransaction(txId, options) {
     // Pull the transaction containing the suspected fraudulent transition
     const tx = await this._web3.eth.getTransaction(txId);
     const decodedOptimismData = this._optimismDecoder.decodeFn(tx.input);
@@ -630,9 +638,9 @@ class OptimisticRollIn {
     const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
 
     return sighash === '0x08542bb1' || sighash === '0x6a8dddef'
-      ? await this._verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime)
+      ? await this._verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime, options)
       : sighash === '0x177f15c5' || sighash === '0x1646d051'
-      ? await this._verifyTransition(suspectHex, decodedOptimismData, lastTime)
+      ? await this._verifyTransition(suspectHex, decodedOptimismData, lastTime, options)
       : { valid: true };
   }
 

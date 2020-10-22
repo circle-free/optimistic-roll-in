@@ -22,6 +22,16 @@ const somePureTransition = (_user, _currentState, _arg) => {
   return newState;
 };
 
+const somPureTransitionVerifier = (decodedCallData, newStateHex) => {
+  const { user, current_state: currentStateHex, some_arg: somArgHex } = decodedCallData;
+
+  return toHex(somePureTransition(user, currentStateHex, somArgHex)) === newStateHex;
+};
+
+const pureVerifiers = {
+  '0xef6f6a42': somPureTransitionVerifier,
+};
+
 const someFraudTransition = (_user, _currentState, _argHex) => {
   return to32ByteBuffer(1337);
 };
@@ -93,22 +103,12 @@ contract('Optimistic Roll In', (accounts) => {
 
       const oriOptions = { treeOptions: { elementPrefix: '00' }, web3 };
 
-      suspectOptimist = new OptimisticRollIn(
-        optimismContractInstance,
-        logicContractInstance,
-        suspect,
-        oriOptions
-      );
+      suspectOptimist = new OptimisticRollIn(optimismContractInstance, logicContractInstance, suspect, oriOptions);
 
-      accuserOptimist = new OptimisticRollIn(
-        optimismContractInstance,
-        logicContractInstance,
-        accuser,
-        oriOptions
-      );
+      accuserOptimist = new OptimisticRollIn(optimismContractInstance, logicContractInstance, accuser, oriOptions);
     });
 
-    it.only('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
+    it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
       suspectBondAmount = '1000000000000000000';
       const { receipt } = await suspectOptimist.bond(suspectBondAmount);
       const bondBalance = await suspectOptimist.getBalance();
@@ -122,7 +122,7 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it.only('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
+    it('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
       suspectDepositAmount = '500000000000000000';
       const additionalBond = '0';
       const options = { deposit: suspectDepositAmount, bond: additionalBond };
@@ -146,7 +146,7 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it.only('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
+    it('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
       const someArg = generateElements(1, { seed: '11' })[0];
 
       const callArgs = [toHex(someArg)];
@@ -164,12 +164,11 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it.only('[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).', async () => {
+    it('[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).', async () => {
       const someArg = generateElements(1, { seed: '22' })[0];
 
       const callArgs = [toHex(someArg)];
       const newState = somePureTransition(suspect, suspectOptimist.currentState, someArg);
-
       const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState);
       const accountState = await suspectOptimist.getAccountState();
       suspectLastTxId = receipt.transactionHash;
@@ -185,18 +184,19 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it.only('[ 5] allows a user (accuser) to immediately verify a valid optimistic state transition.', async () => {
+    it('[ 5] allows a user (accuser) to immediately verify a valid optimistic state transition (using the node).', async () => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
 
       expect(valid).to.be.true;
       expect(user).to.equal(suspect.toLowerCase());
     });
 
-    it.only('[ 6] allows a user (suspect) to perform a valid optimistic state transition.', async () => {
+    it('[ 6] allows a user (suspect) to perform a valid optimistic state transition.', async () => {
       const someArg = generateElements(1, { seed: '33' })[0];
 
       const callArgs = [toHex(someArg)];
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs);
+      const newState = somePureTransition(suspect, suspectOptimist.currentState, someArg);
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState);
       const accountState = await suspectOptimist.getAccountState();
       suspectLastTxId = receipt.transactionHash;
 
@@ -211,8 +211,8 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it('[ 7] allows a user (accuser) to immediately verify a valid optimistic state transition.', async () => {
-      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
+    it('[ 7] allows a user (accuser) to immediately verify a valid optimistic state transition (using local js).', async () => {
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.true;
       expect(user).to.equal(suspect.toLowerCase());
@@ -224,7 +224,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       for (let i = 0; i < calls; i++) {
         const callArgs = [toHex(someArgs[i])];
-        suspectOptimist.some_pure_transition.queue(callArgs);
+        const newState = somePureTransition(suspect, suspectOptimist.queuedState, someArgs[i]);
+        suspectOptimist.some_pure_transition.queue(callArgs, newState);
       }
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
@@ -246,8 +247,8 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it('[ 9] allows a user (accuser) to immediately verify valid batched optimistic state transitions.', async () => {
-      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
+    it('[ 9] allows a user (accuser) to immediately verify valid batched optimistic state transitions (using local js).', async () => {
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.true;
       expect(user).to.equal(suspect.toLowerCase());
@@ -261,18 +262,14 @@ contract('Optimistic Roll In', (accounts) => {
       const someArgs = generateElements(calls, { seed: '55' });
 
       for (let i = 0; i < calls; i++) {
-        if (i === fraudulentIndex) {
-          // Hijack the internal function with a fraudulent one
-          logicFunctions['some_pure_transition'] = someFraudTransition;
-        }
-
         const callArgs = [toHex(someArgs[i])];
-        suspectOptimist.some_pure_transition.queue(callArgs);
 
-        if (i === fraudulentIndex) {
-          // Reset the internal function with the proper one
-          logicFunctions['some_pure_transition'] = somePureTransition;
-        }
+        const newState =
+          i === fraudulentIndex
+            ? someFraudTransition(suspect, suspectOptimist.queuedState, someArgs[i])
+            : somePureTransition(suspect, suspectOptimist.queuedState, someArgs[i]);
+
+        suspectOptimist.some_pure_transition.queue(callArgs, newState);
       }
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
@@ -295,8 +292,8 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it('[11] allows a user (accuser) to immediately detect a transaction containing a fraudulent state transition.', async () => {
-      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
+    it('[11] allows a user (accuser) to immediately detect a transaction containing a fraudulent state transition (using local js).', async () => {
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.false;
       expect(user).to.equal(suspect.toLowerCase());
@@ -312,7 +309,8 @@ contract('Optimistic Roll In', (accounts) => {
       const someArg = generateElements(1, { seed: '66' })[0];
 
       const callArgs = [toHex(someArg)];
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs);
+      const newState = somePureTransition(suspect, suspectOptimist.currentState, someArg);
+      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState);
       const accountState = await suspectOptimist.getAccountState();
       suspectLastTxId = receipt.transactionHash;
 
@@ -343,7 +341,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       for (let i = 0; i < calls; i++) {
         const callArgs = [toHex(someArgs[i])];
-        suspectOptimist.some_pure_transition.queue(callArgs);
+        const newState = somePureTransition(suspect, suspectOptimist.queuedState, someArgs[i]);
+        suspectOptimist.some_pure_transition.queue(callArgs, newState);
       }
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
@@ -442,8 +441,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(null);
       expect(accuserLockedTime.toString()).to.equal('0');
 
-      if (receipt.gasUsed !== 299862) {
-        console.log(`Not Critical, but we expected gas used for [ 17] to be 299862, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 299874) {
+        console.log(`Not Critical, but we expected gas used for [ 17] to be 299874, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -505,7 +504,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       for (let i = 0; i < calls; i++) {
         const callArgs = [toHex(someArgs[i])];
-        suspectOptimist.some_pure_transition.queue(callArgs);
+        const newState = somePureTransition(suspect, suspectOptimist.queuedState, someArgs[i]);
+        suspectOptimist.some_pure_transition.queue(callArgs, newState);
       }
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
@@ -523,8 +523,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 329030) {
-        console.log(`Not Critical, but we expected gas used for [ 20] to be 329030, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 329138) {
+        console.log(`Not Critical, but we expected gas used for [ 20] to be 329138, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -555,7 +555,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       for (let i = 0; i < calls; i++) {
         const callArgs = [toHex(someArgs[i])];
-        suspectOptimist.some_pure_transition.queue(callArgs);
+        const newState = somePureTransition(suspect, suspectOptimist.queuedState, someArgs[i]);
+        suspectOptimist.some_pure_transition.queue(callArgs, newState);
       }
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
