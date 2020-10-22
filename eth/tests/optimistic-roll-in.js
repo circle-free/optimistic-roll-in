@@ -100,7 +100,6 @@ contract('Optimistic Roll In', (accounts) => {
       suspectOptimist = new OptimisticRollIn(
         optimismContractInstance,
         logicContractInstance,
-        logicFunctions,
         suspect,
         oriOptions
       );
@@ -108,13 +107,12 @@ contract('Optimistic Roll In', (accounts) => {
       accuserOptimist = new OptimisticRollIn(
         optimismContractInstance,
         logicContractInstance,
-        logicFunctions,
         accuser,
         oriOptions
       );
     });
 
-    it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
+    it.only('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
       suspectBondAmount = '1000000000000000000';
       const { receipt } = await suspectOptimist.bond(suspectBondAmount);
       const bondBalance = await suspectOptimist.getBalance();
@@ -128,7 +126,7 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
+    it.only('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
       suspectDepositAmount = '500000000000000000';
       const additionalBond = '0';
       const options = { deposit: suspectDepositAmount, bond: additionalBond };
@@ -152,7 +150,7 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
+    it.only('[ 3] allows a user (suspect) to perform a normal state transition (and remain outside of optimism).', async () => {
       const someArg = generateElements(1, { seed: '11' })[0];
 
       const callArgs = [toHex(someArg)];
@@ -170,7 +168,7 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it('[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).', async () => {
+    it.only('[ 4] allows a user (suspect) to perform a valid optimistic state transition (and enter optimism).', async () => {
       const someArg = generateElements(1, { seed: '22' })[0];
 
       const callArgs = [toHex(someArg)];
@@ -189,7 +187,7 @@ contract('Optimistic Roll In', (accounts) => {
       }
     });
 
-    it('[ 5] allows a user (accuser) to immediately verify a valid optimistic state transition.', async () => {
+    it.only('[ 5] allows a user (accuser) to immediately verify a valid optimistic state transition.', async () => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
 
       expect(valid).to.be.true;
