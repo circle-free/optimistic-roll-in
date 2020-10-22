@@ -6,6 +6,8 @@ const { to32ByteBuffer, hashPacked, toHex, toBuffer } = require('./utils');
 
 const proofOptions = { compact: true, simple: true };
 
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
 class OptimisticRollIn {
   constructor(oriInstance, logicInstance, functions, accountAddress, options = {}) {
     const {
@@ -301,8 +303,6 @@ class OptimisticRollIn {
   async _performPessimistically(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
 
-    // TODO: prevent performing unless out of optimism, or automatically perform and exit
-
     const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
     const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress });
@@ -315,8 +315,6 @@ class OptimisticRollIn {
   // PRIVATE: Non-optimistically perform a transition to exit optimistic state, and update internal state (only for self)
   async _performPessimisticallyWhileExitingOptimism(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    // TODO: prevent performing unless in optimism, or automatically perform non-optimistically
 
     const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
@@ -335,8 +333,6 @@ class OptimisticRollIn {
   // PRIVATE: Optimistically perform a transition to enter optimistic state, and update internal state (only for self)
   async _performOptimisticallyWhileEnteringOptimism(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    // TODO: prevent performing unless out of optimism, or automatically perform optimistically
 
     const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
@@ -364,8 +360,6 @@ class OptimisticRollIn {
   // PRIVATE: Optimistically perform a transition while already in optimistic state, and update internal state (only for self)
   async _performOptimistically(functionName, args = []) {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    // TODO: prevent performing unless in optimism, or automatically perform and enter
 
     const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
@@ -399,8 +393,6 @@ class OptimisticRollIn {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
     assert(functionNames.length > 0, 'No function calls specified.');
     assert(functionNames.length === args.length, 'Function and args count mismatch.');
-
-    // TODO: prevent performing unless in optimism, or automatically perform many and enter
 
     // Compute the new state from the current state, locally
     const callDataArray = [];
@@ -447,8 +439,6 @@ class OptimisticRollIn {
     assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
     assert(functionNames.length > 0, 'No function calls specified.');
     assert(functionNames.length === args.length, 'Function and args count mismatch.');
-
-    // TODO: prevent performing unless out of optimism, or automatically perform optimistically
 
     // Compute the new state from the current state, locally
     const callDataArray = [];
@@ -533,15 +523,6 @@ class OptimisticRollIn {
     return callDataHex;
   }
 
-  // TODO: Returns if can exit optimism
-  async canExit() {
-    const currentBlockNumber = await this._web3.eth.getBlockNumber();
-    const { timestamp } = await this._web3.eth.getBlock(currentBlockNumber);
-
-    // TODO: make threshold an ORI option
-    return this._state.lastTime + 600 < timestamp;
-  }
-
   // PUBLIC: Bonds the user's account, using the source address (which may be the same as the user)
   bond(amount) {
     // TODO: prevent over-bonding unless option to force
@@ -556,7 +537,7 @@ class OptimisticRollIn {
 
     // TODO: prevent initializing already initialized account
 
-    const { deposit, bond } = options;
+    const { deposit = '0', bond = '0' } = options;
     const value = (BigInt(deposit) + BigInt(bond)).toString();
     const callOptions = { value, from: this._sourceAddress };
     const result = await this._oriContractInstance.initialize(bond, callOptions);
@@ -703,17 +684,17 @@ class OptimisticRollIn {
   }
 
   // PUBLIC: Rollback optimistic state (and thus calldata tree) to right before the fraud index
-  async rollback(fraudIndex, options = {}) {
-    const { bondAmount = '0' } = options;
+  async rollback(options = {}) {
+    const { index = await this.getRollbackSize(), bondAmount = '0' } = options;
 
     // TODO: check if bond amount is sufficient
-    // TODO: detect fraudIndex from chain
+    // TODO: detect index from chain
 
     // Need to create a call data Merkle Tree of all pre-invalid-transition call data
     // Note: rollbackSize is a bad name. Its really the expected size of the tree after the rollback is performed
-    const oldCallData = this._state.callDataTree.elements.slice(0, fraudIndex);
+    const oldCallData = this._state.callDataTree.elements.slice(0, index);
     const oldCallDataTree = new MerkleTree(oldCallData, this._treeOptions);
-    const rolledBackCallDataArray = this._state.callDataTree.elements.slice(fraudIndex);
+    const rolledBackCallDataArray = this._state.callDataTree.elements.slice(index);
 
     // Need to build an Append Proof to prove that the old call data root, when appended with the rolled back call data,
     // has the root that equals the root of current on-chain call data tree
@@ -748,9 +729,53 @@ class OptimisticRollIn {
     return result;
   }
 
-  // GETTER: Returns the account user's balance
+  // PUBLIC: Returns the account user's balance (on chain)
   getBalance() {
-    return optimismContractInstance.balances(this._state.user);
+    return this._oriContractInstance.balances(this._state.user);
+  }
+
+  // PUBLIC: Returns the account user's balance (on chain)
+  getAccountState() {
+    return this._oriContractInstance.account_states(this._state.user);
+  }
+
+  // PUBLIC: Returns the rollback size that the account needs to be rolled back to (on chain)
+  getRollbackSize() {
+    return this._oriContractInstance.rollback_sizes(this._state.user);
+  }
+
+  // PUBLIC: Returns whether the account is in an optimistic state (on chain)
+  async getIsInOptimisticState() {
+    const accountState = await getAccountState();
+
+    return hashPacked([to32ByteBuffer(0), this._state.currentState, to32ByteBuffer(0)]).equals(accountState);
+  }
+
+  // PUBLIC: Returns lock time for the account (on chain)
+  getLockTime() {
+    return this._oriContractInstance.locked_times(this._state.user);
+  }
+
+  // PUBLIC: Returns approximate time remaining until account can exit optimism (on chain)
+  async getTimeLeftToPessimism() {
+    const currentBlockNumber = await this._web3.eth.getBlockNumber();
+    const { timestamp } = await this._web3.eth.getBlock(currentBlockNumber);
+    const lockTime = await this.getLockTime();
+
+    // TODO: make threshold an ORI option
+    return timestamp - (lockTime.toNumber() + 600);
+  }
+
+  // PUBLIC: Returns if can exit optimism (on chain)
+  async canExit() {
+    return (await this.getTimeLeftToPessimism()) > 0;
+  }
+
+  // PUBLIC: Returns the locked of this account, if any (on chain)
+  async getLocker() {
+    const locker = await this._oriContractInstance.lockers(this._state.user);
+
+    return locker === ZERO_ADDRESS ? null : locker;
   }
 }
 
