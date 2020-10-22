@@ -1,0 +1,44 @@
+specVersion: 0.0.1
+description: Optimistic Roll In for Ethereum
+repository: https://github.com/circle-free/optimistic-roll-in
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum/contract
+    name: Contract
+    network: ropsten
+    source:
+      address: "0x199485634D45AEa78C9Cab89cE165c9a775CFFF1"
+      abi: Contract
+      startBlock: 8925386
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.4
+      language: wasm/assemblyscript
+      entities:
+        - ORI_Fraud_Proven
+        - ORI_Locked
+        - ORI_New_Optimistic_State
+        - ORI_New_Optimistic_States
+        - ORI_New_State
+        - ORI_Rolled_Back
+        - ORI_Unlocked
+      abis:
+        - name: Contract
+          file: ./abis/Contract.json
+      eventHandlers:
+        - event: ORI_Fraud_Proven(indexed address,indexed address,indexed uint256,uint256)
+          handler: handleORI_Fraud_Proven
+        - event: ORI_Locked(indexed address,indexed address)
+          handler: handleORI_Locked
+        - event: ORI_New_Optimistic_State(indexed address,indexed uint256)
+          handler: handleORI_New_Optimistic_State
+        - event: ORI_New_Optimistic_States(indexed address,indexed uint256)
+          handler: handleORI_New_Optimistic_States
+        - event: ORI_New_State(indexed address,indexed bytes32)
+          handler: handleORI_New_State
+        - event: ORI_Rolled_Back(indexed address,indexed uint256,indexed uint256)
+          handler: handleORI_Rolled_Back
+        - event: ORI_Unlocked(indexed address,indexed address)
+          handler: handleORI_Unlocked
+      file: ./src/mapping.ts
