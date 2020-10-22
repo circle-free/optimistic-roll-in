@@ -43,9 +43,9 @@ module.exports = {
     // options below to some value.
     //
     development: {
-     host: "127.0.0.1",     // Localhost (default: none)
-     port: 7545,            // Standard Ethereum port (default: none)
-     network_id: "5777",    // Any network (default: none)
+      host: '127.0.0.1', // Localhost (default: none)
+      port: 7545, // Standard Ethereum port (default: none)
+      network_id: '5777', // Any network (default: none)
     },
     // Another network with more advanced options...
     // advanced: {
@@ -74,29 +74,30 @@ module.exports = {
     // }
   },
 
-  contracts_directory: "./eth/contracts",
-  contracts_build_directory: "./eth/build",
-  migrations_directory: "./eth/migrations",
+  contracts_directory: './eth/contracts',
+  contracts_build_directory: './eth/build',
+  migrations_directory: './eth/migrations',
   test_directory: './eth/tests',
 
   // Set default mocha options here, use special reporters etc.
   mocha: {
     useColors: true,
     enableTimeouts: false,
-    timeout: 120000
+    timeout: 120000,
   },
 
   // Configure your compilers
   compilers: {
     solc: {
-      version: "0.7.3",    // Fetch exact version from solc-bin (default: truffle's version)
-      settings: {          // See the solidity docs for advice about optimization and evmVersion
-       optimizer: {
-         enabled: true,
-         runs: 999999
-       },
-       evmVersion: "petersburg"
-      }
+      version: '0.7.3', // Fetch exact version from solc-bin (default: truffle's version)
+      settings: {
+        // See the solidity docs for advice about optimization and evmVersion
+        optimizer: {
+          enabled: true,
+          runs: 999999,
+        },
+        evmVersion: 'petersburg',
+      },
     },
   },
 };
