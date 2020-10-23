@@ -207,7 +207,7 @@ class OptimisticRollIn {
 
     try {
       // If a pure function was provided to compute this locally, then use it
-      if (pureVerifiers?.[sighash]) return toHex(pureVerifiers[sighash](decodedCallData, newStateHex));
+      if (pureVerifiers?.[sighash]) return pureVerifiers[sighash](decodedCallData, newStateHex);
 
       // If not, we ned to verify against with the node, which is slower
       const callObject = { to: this._logicContractInstance.address, data: callDataHex };
