@@ -89,6 +89,7 @@ module.exports = {
   from32ByteBuffer,
   hash,
   hashPacked,
+  prefix,
   toHex,
   toBuffer,
   toBigInt,

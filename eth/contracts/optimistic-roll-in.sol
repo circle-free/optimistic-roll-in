@@ -28,24 +28,24 @@ contract Optimistic_Roll_In {
   address public immutable logic_address;
   bytes4 public immutable initializer;
   uint256 public immutable lock_time;
-  uint256 public immutable min_bond;
+  uint256 public immutable required_bond;
 
   mapping(address => uint256) public balances;
   mapping(address => bytes32) public account_states;
   mapping(address => address) public lockers;
-  mapping(address => uint256) public locked_times;
+  mapping(address => uint256) public locked_timestamps;
   mapping(address => uint256) public rollback_sizes;
 
   constructor(
     address _logic_address,
     bytes4 _initializer,
     uint256 _lock_time,
-    uint256 _min_bond
+    uint256 _required_bond
   ) {
     logic_address = _logic_address;
     initializer = _initializer;
     lock_time = _lock_time;
-    min_bond = _min_bond;
+    required_bond = _required_bond;
   }
 
   modifier not_initialized(address user) {
@@ -81,48 +81,37 @@ contract Optimistic_Roll_In {
   }
 
   modifier lock_expired(address user) {
-    require(locked_times[user] + lock_time <= block.timestamp, "INSUFFICIENT_WINDOW");
+    require(locked_timestamps[user] + lock_time <= block.timestamp, "INSUFFICIENT_WINDOW");
     _;
   }
 
   // Fallback to receive ETH and bond msg.value for msg.sender
   receive() external payable {
-    apply_bond(msg.sender, msg.value);
+    apply_bond(msg.sender);
   }
 
   // Bonds amount for user, and reverts if resulting balance less than 1 ETH
-  function apply_bond(address user, uint256 amount) internal {
-    if (amount == 0) {
-      require(balances[user] >= min_bond, "INSUFFICIENT_BOND");
-      return;
-    }
+  function apply_bond(address user) internal returns (uint256 remainder) {
+    if (balances[user] == required_bond) return msg.value;
 
-    if (amount >= 1000000000000000000) {
-      balances[user] += amount;
-      return;
-    }
+    require(msg.value >= required_bond, "INSUFFICIENT_BOND");
 
-    balances[user] += amount;
-    require(balances[user] >= min_bond, "INSUFFICIENT_BOND");
+    balances[user] = required_bond;
+    return msg.value - required_bond;
   }
 
   // Bonds msg.value for user
   function bond(address user) public payable {
-    apply_bond(user, msg.value);
+    require(apply_bond(user) == 0, "INVALID_BOND");
   }
 
   // Sets user's account state to starting point, and bonds msg.value
-  function initialize(uint256 bond_amount) external payable not_initialized(msg.sender) {
-    require(bond_amount <= msg.value, "INVALID_BOND");
-
+  function initialize() external payable not_initialized(msg.sender) {
     address user = msg.sender;
-    apply_bond(user, bond_amount);
-
-    // reuse bond_amount as value being sent to initializer
-    bond_amount = msg.value - bond_amount;
+    uint256 remainder = apply_bond(user);
 
     // call the initializer, passing any remaining amount
-    (bool success, bytes memory return_bytes) = logic_address.call{ value: bond_amount }(
+    (bool success, bytes memory return_bytes) = logic_address.call{ value: remainder }(
       abi.encodeWithSelector(initializer, user)
     );
 
@@ -314,12 +303,12 @@ contract Optimistic_Roll_In {
 
     // Lock both the accuser and the suspect
     lockers[suspect] = accuser;
-    locked_times[suspect] = block.timestamp;
+    locked_timestamps[suspect] = block.timestamp;
     lockers[accuser] = accuser;
-    locked_times[accuser] = block.timestamp;
+    locked_timestamps[accuser] = block.timestamp;
 
     // The accuser may be trying to bond at the same time (this also check that have enough bonded)
-    apply_bond(accuser, msg.value);
+    require(apply_bond(accuser) == 0, "INVALID_BOND");
 
     emit ORI_Locked(suspect, accuser);
   }
@@ -340,9 +329,9 @@ contract Optimistic_Roll_In {
     // Unlock both accounts
     address accuser = lockers[suspect];
     lockers[suspect] = address(0);
-    locked_times[suspect] = 0;
+    locked_timestamps[suspect] = 0;
     lockers[accuser] = address(0);
-    locked_times[accuser] = 0;
+    locked_timestamps[accuser] = 0;
 
     // Give the suspect the accuser's bond for having not proven fraud within a reasonable time frame
     // TODO: consider burning some here to prevent self-reporting breakeven
@@ -412,14 +401,14 @@ contract Optimistic_Roll_In {
 
     // Unlock the accuser's account
     lockers[accuser] = address(0);
-    locked_times[accuser] = 0;
+    locked_timestamps[accuser] = 0;
 
     // Set the rollback size to the amount of elements that should be in the call data tree once rolled back
     rollback_sizes[suspect] = transition_index;
 
     // Set the suspect as the reason for their account's lock
     lockers[suspect] = suspect;
-    locked_times[suspect] = 0;
+    locked_timestamps[suspect] = 0;
 
     emit ORI_Fraud_Proven(accuser, suspect, transition_index, last_time);
   }
@@ -475,7 +464,7 @@ contract Optimistic_Roll_In {
     }
 
     // The user may be trying to bond at the same time (this also check that have enough bonded)
-    apply_bond(user, msg.value);
+    require(apply_bond(user) == 0, "INVALID_BOND");
 
     emit ORI_Rolled_Back(user, rolled_back_size, block.timestamp);
   }
