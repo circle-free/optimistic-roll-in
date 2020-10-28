@@ -79,22 +79,23 @@ const someDelay = (seconds) => {
 
 contract('Optimistic Roll In', (accounts) => {
   describe('Basic Testing (must be performed in order)', async () => {
-    let suspect = accounts[0];
-    let accuser = accounts[1];
-
-    let suspectOptimist = null;
-    let accuserOptimist = null;
-    let suspectLastTxId = null;
-
-    let suspectBondAmount = null;
-    let suspectDepositAmount = null;
-    let accuserBondAmount = null;
-
+    let requiredBond = null;
+    let lockTime = null;
     let logicContractInstance = null;
     let logicAddress = null;
     let optimismContractInstance = null;
     let optimismAddress = null;
     let fraudulentTransitionIndex = null;
+
+    let suspect = accounts[0];
+    let suspectOptimist = null;
+    let suspectBondAmount = '0';
+    let suspectLastTxId = null;
+    let suspectDepositAmount = '0';
+
+    let accuser = accounts[1];
+    let accuserOptimist = null;
+    let accuserBondAmount = '0';
 
     before(async () => {
       logicContractInstance = await SomeLogicContractArtifact.deployed();
@@ -102,7 +103,11 @@ contract('Optimistic Roll In', (accounts) => {
       optimismContractInstance = await OptimisticRollInArtifact.deployed();
       optimismAddress = optimismContractInstance.address;
 
-      const oriOptions = { treeOptions: { elementPrefix: '00' }, web3 };
+      const network = await web3.eth.net.getId();
+
+      requiredBond = network === 5777 ? '1000000000000000000' : '10000000000000';
+      lockTime = network === 5777 ? '600' : '60';
+      const oriOptions = { treeOptions: { elementPrefix: '00' }, web3, requiredBond, lockTime };
 
       suspectOptimist = new OptimisticRollIn(optimismContractInstance, logicContractInstance, suspect, oriOptions);
 
@@ -110,24 +115,23 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
-      suspectBondAmount = (await web3.eth.net.getId()) === 5777 ? '1000000000000000000' : '10000000000000';
+      const { receipt } = await suspectOptimist.bond();
+      suspectBondAmount = requiredBond;
 
-      const { receipt } = await suspectOptimist.bond(suspectBondAmount);
       const bondBalance = await suspectOptimist.getBalance();
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
 
       expect(bondBalance.toString()).to.equal(suspectBondAmount);
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
 
-      if (receipt.gasUsed !== 42761) {
-        console.log(`Not Critical, but we expected gas used for [ 1] to be 42761, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 42844) {
+        console.log(`Not Critical, but we expected gas used for [ 1] to be 42844, but got ${receipt.gasUsed}`);
       }
     });
 
     it('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
       suspectDepositAmount = '500000000000000000';
-      const additionalBond = '0';
-      const options = { deposit: suspectDepositAmount, bond: additionalBond };
+      const options = { deposit: suspectDepositAmount };
       const { receipt, logs } = await suspectOptimist.initialize(options);
       const accountState = await suspectOptimist.getAccountState();
       const bondBalance = await suspectOptimist.getBalance();
@@ -143,8 +147,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      if (receipt.gasUsed !== 53925) {
-        console.log(`Not Critical, but we expected gas used for [ 2] to be 53925, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 53636) {
+        console.log(`Not Critical, but we expected gas used for [ 2] to be 53636, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -161,8 +165,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(logs[0].args[0]).to.equal(suspect);
       expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
 
-      if (receipt.gasUsed !== 289299) {
-        console.log(`Not Critical, but we expected gas used for [ 3] to be 289299, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 289277) {
+        console.log(`Not Critical, but we expected gas used for [ 3] to be 289277, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -181,8 +185,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 34373) {
-        console.log(`Not Critical, but we expected gas used for [ 4] to be 34373, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 34351) {
+        console.log(`Not Critical, but we expected gas used for [ 4] to be 34351, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -244,8 +248,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 324759) {
-        console.log(`Not Critical, but we expected gas used for [ 8] to be 324759, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 324747) {
+        console.log(`Not Critical, but we expected gas used for [ 8] to be 324747, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -289,8 +293,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 327886) {
-        console.log(`Not Critical, but we expected gas used for [ 10] to be 327886, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 327898) {
+        console.log(`Not Critical, but we expected gas used for [ 10] to be 327898, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -322,8 +326,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 38640) {
-        console.log(`Not Critical, but we expected gas used for [ 12] to be 38640, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 38651) {
+        console.log(`Not Critical, but we expected gas used for [ 12] to be 38651, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -361,24 +365,23 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 98105) {
-        console.log(`Not Critical, but we expected gas used for [ 14] to be 98105, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 98117) {
+        console.log(`Not Critical, but we expected gas used for [ 14] to be 98117, but got ${receipt.gasUsed}`);
       }
     });
 
     it("[15] allows a user (accuser) to lock a suspect's account for a time frame.", async () => {
       // An accuser, who previously detected the fraudulent transition will, will lock out the suspect (and bond themselves at the same time)
-      accuserBondAmount = (await web3.eth.net.getId()) === 5777 ? '1000000000000000000' : '10000000000000';
-
       const fraudster = accuserOptimist.getFraudster(suspect);
-      const { receipt, logs } = await fraudster.lock({ bond: accuserBondAmount });
+      const { receipt, logs } = await fraudster.lock();
+      accuserBondAmount = requiredBond;
 
       const block = await web3.eth.getBlock(receipt.blockNumber);
       const suspectLocker = await fraudster.getLocker();
-      const suspectLockedTime = await fraudster.getLockTime();
+      const suspectLockedTime = await fraudster.getLockTimestamp();
       const accuserBondBalance = await accuserOptimist.getBalance();
       const accuserLocker = await accuserOptimist.getLocker();
-      const accuserLockedTime = await accuserOptimist.getLockTime();
+      const accuserLockedTime = await accuserOptimist.getLockTimestamp();
 
       expect(logs[0].event).to.equal('ORI_Locked');
       expect(logs[0].args[0]).to.equal(suspect);
@@ -391,8 +394,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(accuser);
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
 
-      if (receipt.gasUsed !== 128024) {
-        console.log(`Not Critical, but we expected gas used for [ 15] to be 128024, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 128107) {
+        console.log(`Not Critical, but we expected gas used for [ 15] to be 128107, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -416,12 +419,12 @@ contract('Optimistic Roll In', (accounts) => {
 
       const suspectBalance = await fraudster.getBalance();
       const suspectLocker = await fraudster.getLocker();
-      const suspectLockedTime = await fraudster.getLockTime();
+      const suspectLockedTime = await fraudster.getLockTimestamp();
       const suspectRollbackSize = await fraudster.getRollbackSize();
 
       const accuserBalance = await accuserOptimist.getBalance();
       const accuserLocker = await accuserOptimist.getLocker();
-      const accuserLockedTime = await accuserOptimist.getLockTime();
+      const accuserLockedTime = await accuserOptimist.getLockTimestamp();
 
       const expectedAccuserBalance = web3.utils
         .toBN(suspectBondAmount)
@@ -444,40 +447,37 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(null);
       expect(accuserLockedTime.toString()).to.equal('0');
 
-      if (receipt.gasUsed !== 299874) {
-        console.log(`Not Critical, but we expected gas used for [ 17] to be 299874, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 299849) {
+        console.log(`Not Critical, but we expected gas used for [ 17] to be 299849, but got ${receipt.gasUsed}`);
       }
     });
 
     it('[18] allows a user (accuser) to unbond their balance (including the reward).', async () => {
       const startingEth = BigInt(await web3.eth.getBalance(accuser));
       const { receipt } = await accuserOptimist.unbond(accuser);
+      accuserBondAmount = '0';
       const endingEth = BigInt(await web3.eth.getBalance(accuser));
+
       const accuserBalance = await accuserOptimist.getBalance();
       const suspectBalance = await suspectOptimist.getBalance();
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
 
-      accuserBondAmount = '0';
-      let expectedBalance = null;
-
       // I guess negative here for public since bond/reward is cheaper than proof cost
-      expectedBalance = (await web3.eth.net.getId()) === 5777 ? '1999578440000000000' : '-1078000000000';
+      const expectedBalance = (await web3.eth.net.getId()) === 5777 ? '1999578020000000000' : '-1078000000000';
 
-      expect((endingEth - startingEth).toString()).to.equal('1999578460000000000');
+      expect((endingEth - startingEth).toString()).to.equal(expectedBalance);
       expect(accuserBalance.toString()).to.equal('0');
       expect(suspectBalance.toString()).to.equal('0');
       expect(optimismBalance.toString()).to.equal('0');
 
-      if (receipt.gasUsed !== 21077) {
-        console.log(`Not Critical, but we expected gas used for [ 18] to be 21077, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 21099) {
+        console.log(`Not Critical, but we expected gas used for [ 18] to be 21099, but got ${receipt.gasUsed}`);
       }
     });
 
     it('[19] allows a user (suspect) to rollback their call data tree.', async () => {
-      suspectBondAmount = (await web3.eth.net.getId()) === 5777 ? '1000000000000000000' : '10000000000000';
-
-      const rollbackOptions = { bondAmount: suspectBondAmount };
-      const { receipt, logs } = await suspectOptimist.rollback(rollbackOptions);
+      const { receipt, logs } = await suspectOptimist.rollback();
+      suspectBondAmount = requiredBond;
 
       const accountState = await suspectOptimist.getAccountState();
 
@@ -500,8 +500,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 335352) {
-        console.log(`Not Critical, but we expected gas used for [ 19] to be 335352, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 335480) {
+        console.log(`Not Critical, but we expected gas used for [ 19] to be 335480, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -530,8 +530,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 329138) {
-        console.log(`Not Critical, but we expected gas used for [ 20] to be 329138, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 329042) {
+        console.log(`Not Critical, but we expected gas used for [ 20] to be 329042, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -590,8 +590,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState).to.equal(toHex(suspectOptimist.accountState));
 
-      if (receipt.gasUsed !== 166850) {
-        console.log(`Not Critical, but we expected gas used for [ 22] to be 166850, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 166910) {
+        console.log(`Not Critical, but we expected gas used for [ 22] to be 166910, but got ${receipt.gasUsed}`);
       }
     });
   });

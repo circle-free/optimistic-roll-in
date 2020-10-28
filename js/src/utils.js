@@ -16,24 +16,71 @@ const hash = (buffer) => new Keccak(256).update(buffer).digest();
 
 const hashPacked = (buffers) => hash(Buffer.concat(buffers));
 
-const toHex = (buffer) => {
-  if (!Buffer.isBuffer(buffer)) return buffer;
+const prefix = (value) => (value.startsWith('0x') ? value : '0x' + value);
 
-  if (Array.isArray(buffer)) {
-    return buffer.map((b) => toHex(b));
+const removePrefix = (value) => (value.startsWith('0x') ? value.slice(2) : value);
+
+// Only accepts 4 types of values
+// array of (hex strings, BigInts, or Buffers)
+// Hex string, which will be returned 0x-prefixed (if not already)
+// BigInt, which will be returned as 0x-prefixed 32-byte hex-string
+// Buffer, which will be returned as 0x-prefixed hex string (size unchanged)
+const toHex = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((v) => toHex(v));
   }
 
-  return '0x' + buffer.toString('hex');
+  if (typeof value == 'string') return prefix(value);
+
+  if (typeof value == 'bigint') return prefix(leftPad(value.toString(16), 64));
+
+  if (Buffer.isBuffer(value)) return prefix(value.toString('hex'));
+
+  console.log('toHex', value);
+
+  throw Error('Invalid input type');
 };
 
-const toBuffer = (hex) => {
-  if (Buffer.isBuffer(hex)) return hex;
-
-  if (Array.isArray(hex)) {
-    return hex.map((h) => toBuffer(h));
+// Only accepts 4 types of values
+// array of (hex strings, BigInts, or Buffers)
+// Hex string, which will be returned as Buffer (size unchanged)
+// BigInt, which will be returned as 32-byte Buffer
+// Buffer, which will be returned unchanged
+const toBuffer = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((v) => toBuffer(v));
   }
 
-  return Buffer.from(hex.slice(2), 'hex');
+  if (typeof value == 'string') return Buffer.from(removePrefix(value), 'hex');
+
+  if (typeof value == 'bigint') return Buffer.from(leftPad(value.toString(16), 64), 'hex');
+
+  if (Buffer.isBuffer(value)) return value;
+
+  console.log('toBuffer', value);
+
+  throw Error('Invalid input type');
+};
+
+// Only accepts 4 types of values
+// array of (hex strings, BigInts, or Buffers)
+// Hex string, which will be returned as a BigInt
+// BigInt, which will be returned unchanged
+// Buffer, which will be returned as a BigInt
+const toBigInt = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((v) => toBigInt(v));
+  }
+
+  if (typeof value == 'string') return BigInt(prefix(value));
+
+  if (typeof value == 'bigint') return value;
+
+  if (Buffer.isBuffer(value)) return BigInt(prefix(value.toString('hex')));
+
+  console.log('toBigInt', value);
+
+  throw Error('Invalid input type');
 };
 
 module.exports = {
@@ -42,6 +89,8 @@ module.exports = {
   from32ByteBuffer,
   hash,
   hashPacked,
+  prefix,
   toHex,
   toBuffer,
+  toBigInt,
 };

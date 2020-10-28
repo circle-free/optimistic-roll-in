@@ -46,8 +46,6 @@ const rinkebyProvider = () => new HDWalletProvider({
   providerOrUrl: `https://rinkeby.infura.io/v3/${infuraKey}`
 });
 
-// const infuraKey = "fj4jll3k.....";
-
 module.exports = {
   /**
    * Networks define how you connect to your ethereum client and let you set the
