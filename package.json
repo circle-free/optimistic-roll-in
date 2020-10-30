@@ -1,6 +1,6 @@
 {
   "name": "optimistic-roll-in",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Layer-Agnostic Optimistic Roll-Ins - A Proof of Concept.",
   "main": "js/src/index.js",
   "repository": {
