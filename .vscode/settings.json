@@ -2,12 +2,20 @@
   "cSpell.words": [
     "BigInts",
     "Merkle",
+    "Ropsten's",
     "SPDX",
     "Unbonds",
+    "ZKPs",
+    "gitignored",
+    "hdwallet",
     "keccak",
     "queryable",
     "sighash",
+    "solhint",
+    "solpp",
+    "truffleframework",
     "unbond",
-    "unbonding"
+    "unbonding",
+    "websockets"
   ]
 }

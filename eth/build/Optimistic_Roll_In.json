@@ -51896,7 +51896,7 @@
   "networks": {
     "5777": {
       "events": {
-        "0xa66290bc21cee2ba1a3c6ba2cac21d24511cea1f9ed7efe453736f24fd894886": {
+        "0x55469cdf3fd81a478fed2a1491832e3d145bf2ab3c6a6fbb187022b3885b90fd": {
           "anonymous": false,
           "inputs": [
             {
@@ -51915,12 +51915,6 @@
               "indexed": true,
               "internalType": "uint256",
               "name": "transition_index",
-              "type": "uint256"
-            },
-            {
-              "indexed": false,
-              "internalType": "uint256",
-              "name": "amount",
               "type": "uint256"
             }
           ],
@@ -52028,50 +52022,6 @@
           "name": "ORI_Rolled_Back",
           "type": "event"
         },
-        "0x524512344e535e9bda79e916c2ea8c7b9e5d23d83e1b95181d7622b4ac3d4293": {
-          "anonymous": false,
-          "inputs": [
-            {
-              "indexed": true,
-              "internalType": "address",
-              "name": "suspect",
-              "type": "address"
-            },
-            {
-              "indexed": true,
-              "internalType": "address",
-              "name": "accuser",
-              "type": "address"
-            }
-          ],
-          "name": "ORI_Unlocked",
-          "type": "event"
-        },
-        "0x55469cdf3fd81a478fed2a1491832e3d145bf2ab3c6a6fbb187022b3885b90fd": {
-          "anonymous": false,
-          "inputs": [
-            {
-              "indexed": true,
-              "internalType": "address",
-              "name": "accuser",
-              "type": "address"
-            },
-            {
-              "indexed": true,
-              "internalType": "address",
-              "name": "suspect",
-              "type": "address"
-            },
-            {
-              "indexed": true,
-              "internalType": "uint256",
-              "name": "transition_index",
-              "type": "uint256"
-            }
-          ],
-          "name": "ORI_Fraud_Proven",
-          "type": "event"
-        },
         "0xd896484469c47833eb445d62b95b9dd6b28d0c050a9b7f2ce8902d137316500e": {
           "anonymous": false,
           "inputs": [
@@ -52104,7 +52054,7 @@
     }
   },
   "schemaVersion": "3.3.1",
-  "updatedAt": "2020-10-30T04:07:46.750Z",
+  "updatedAt": "2020-10-30T04:16:29.168Z",
   "networkType": "ethereum",
   "devdoc": {
     "kind": "dev",
