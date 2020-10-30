@@ -16,13 +16,8 @@ contract Optimistic_Roll_In {
   event ORI_New_Optimistic_State(address indexed user, uint256 indexed block_time);
   event ORI_New_Optimistic_States(address indexed user, uint256 indexed block_time);
   event ORI_Locked(address indexed suspect, address indexed accuser);
-  event ORI_Unlocked(address indexed suspect, address indexed accuser);
-  event ORI_Fraud_Proven(
-    address indexed accuser,
-    address indexed suspect,
-    uint256 indexed transition_index,
-    uint256 amount
-  );
+  event ORI_Unlocked(address indexed suspect, address indexed accuser, uint256 indexed block_time);
+  event ORI_Fraud_Proven(address indexed accuser, address indexed suspect, uint256 indexed transition_index);
   event ORI_Rolled_Back(address indexed user, uint256 indexed tree_size, uint256 indexed block_time);
 
   address public immutable logic_address;
@@ -298,7 +293,7 @@ contract Optimistic_Roll_In {
 
   // Lock two users (suspect and accuser)
   // Note: accuser and suspect cannot already be locked, but this might have to change so a single accuser isn't overwhelmed with fraud
-  function lock_user(address suspect) external payable not_locked(msg.sender) not_locked(suspect) {
+  function lock(address suspect) external payable not_locked(msg.sender) not_locked(suspect) {
     address accuser = msg.sender;
 
     // Lock both the accuser and the suspect
@@ -339,11 +334,17 @@ contract Optimistic_Roll_In {
     balances[accuser] = 0;
     balances[suspect] += amount;
 
+    // If suspect was not in optimistic state, then just emit event and return
+    if (last_time == 0) {
+      emit ORI_Unlocked(suspect, accuser, 0);
+      return;
+    }
+
     // Combine call data root, current state (S_n), and current time into account state
-    // Note: updating last time is important, to prevent user blocking fraud proofs by locking themselves
+    // Note: updating last time is important, to prevent suspect blocking fraud proofs by locking themselves
     account_states[suspect] = keccak256(abi.encodePacked(call_data_root, state, bytes32(block.timestamp)));
 
-    emit ORI_Unlocked(suspect, accuser);
+    emit ORI_Unlocked(suspect, accuser, block.timestamp);
   }
 
   // Reward accuser for proving fraud in a suspect's transition, and track the expected rolled back account state size
@@ -410,7 +411,7 @@ contract Optimistic_Roll_In {
     lockers[suspect] = suspect;
     locked_timestamps[suspect] = 0;
 
-    emit ORI_Fraud_Proven(accuser, suspect, transition_index, last_time);
+    emit ORI_Fraud_Proven(accuser, suspect, transition_index);
   }
 
   // Rolls a user back, given the current roots, old roots, and a proof of the optimistic transitions between them
