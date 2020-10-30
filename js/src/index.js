@@ -2,7 +2,7 @@ const assert = require('assert');
 const { MerkleTree, PartialMerkleTree } = require('merkle-trees/js');
 const txDecoder = require('ethereum-tx-decoder');
 
-const { to32ByteBuffer, hashPacked, prefix, toHex, toBuffer } = require('./utils');
+const { to32ByteBuffer, hashPacked, prefix, toHex, toBuffer, compareHex } = require('./utils');
 
 const PROOF_OPTIONS = { compact: true, simple: true };
 
@@ -36,14 +36,23 @@ const TOPICS = {
   ORI_Unlocked: '0x524512344e535e9bda79e916c2ea8c7b9e5d23d83e1b95181d7622b4ac3d4293',
 };
 
+// TODO: smart local gas estimates as default
+// TODO: check if account locked for all performs (maybe not, might be slow)
+
 class OptimisticRollIn {
-  constructor(oriInstance, logicInstance, accountAddress, options = {}) {
+  constructor(accountAddress, contracts = {}, options = {}) {
+    const { oriAddress, oriABI, logicAddress, logicABI } = contracts;
+
     const {
+      oriContract,
+      logicContract,
       sourceAddress = accountAddress,
       treeOptions = {},
       optimismDecoder,
       logicDecoder,
       web3,
+      ethers,
+      ethersSigner,
       parentORI,
       requiredBond,
       lockTime,
@@ -51,31 +60,48 @@ class OptimisticRollIn {
 
     const { elementPrefix = '00' } = treeOptions;
 
-    assert(web3, 'web3 option is mandatory for now.');
+    assert(
+      ethers && ethersSigner ? !web3 : web3,
+      'either web3 or ethers (and ethersSigner) option is mandatory for now.'
+    );
     assert(requiredBond, 'requiredBond option is mandatory for now.');
     assert(lockTime, 'lockTime option is mandatory for now.');
 
     this._web3 = web3;
+    this._ethers = ethers;
+    this._ethersSigner = ethersSigner;
     this._requiredBond = BigInt(requiredBond);
     this._lockTime = Number(lockTime);
-
-    // TODO: check and/or logic_address, initializer, lock_time, min_bond from contract public variables
 
     this._parentORI = parentORI;
 
     this._treeOptions = { unbalanced: true, sortedHash: false, elementPrefix };
 
-    this._oriContractInstance = oriInstance;
-    this._logicContractInstance = logicInstance;
+    if (oriContract) {
+      this._oriContract = oriContract;
+    } else {
+      this._oriContract = this._web3
+        ? new this._web3.eth.Contract(oriABI, oriAddress)
+        : new this._ethers.Contract(oriAddress, oriABI, this._ethersSigner);
+    }
 
-    logicInstance.abi.forEach(({ name, type, signature, stateMutability }) => {
+    if (logicContract) {
+      this._logicContract = logicContract;
+    } else {
+      this._logicContract = this._web3
+        ? new this._web3.eth.Contract(logicABI, logicAddress)
+        : new this._ethers.Contract(logicAddress, logicABI, this._ethersSigner);
+    }
+
+    // TODO: test for ethers
+    this._logicContract.options.jsonInterface.forEach(({ name, type, signature, stateMutability }) => {
       if (type !== 'function') return;
 
-      const functionSet = { normal: (args, options) => this._pessimisticCall(name, args, options) };
+      const functionSet = { normal: (args, callOptions) => this._pessimisticCall(name, args, callOptions) };
 
       if (stateMutability === 'pure' || stateMutability === 'view') {
         Object.assign(functionSet, {
-          optimistic: (args, newState) => this._optimisticCall(name, args, newState),
+          optimistic: (args, newState, callOptions) => this._optimisticCall(name, args, newState, callOptions),
           queue: (args, newState) => this._queueCall(name, args, newState),
         });
       }
@@ -83,8 +109,9 @@ class OptimisticRollIn {
       Object.assign(this, { [name]: functionSet });
     });
 
-    this._optimismDecoder = optimismDecoder ?? new txDecoder.FunctionDecoder(oriInstance.abi);
-    this._logicDecoder = logicDecoder ?? new txDecoder.FunctionDecoder(logicInstance.abi);
+    // TODO: perhaps use web3-ethers instead of ethereum-tx-decoder
+    this._optimismDecoder = optimismDecoder ?? new txDecoder.FunctionDecoder(this._oriContract.options.jsonInterface);
+    this._logicDecoder = logicDecoder ?? new txDecoder.FunctionDecoder(this._logicContract.options.jsonInterface);
 
     this._sourceAddress = sourceAddress;
 
@@ -110,30 +137,36 @@ class OptimisticRollIn {
     const { suspect, fraudIndex, callDataArrayHex, newStateHex, proofHex, lastTime } = parameters;
 
     const {
-      oriInstance,
-      logicInstance,
+      oriContract,
+      logicContract,
       sourceAddress,
       treeOptions = { elementPrefix: '00' },
       optimismDecoder,
       logicDecoder,
       web3,
+      ethers,
+      ethersSigner,
       parentORI,
       requiredBond,
       lockTime,
     } = options;
 
     const oriOptions = {
+      oriContract,
+      logicContract,
       sourceAddress,
       optimismDecoder,
       logicDecoder,
       treeOptions,
       web3,
+      ethers,
+      ethersSigner,
       parentORI,
       requiredBond,
       lockTime,
     };
 
-    const fraudster = new OptimisticRollIn(oriInstance, logicInstance, suspect, oriOptions);
+    const fraudster = new OptimisticRollIn(suspect, {}, oriOptions);
 
     // Build a partial merkle tree (for the call data) from the proof data pulled from this transaction
     const appendProof = { appendElements: toBuffer(callDataArrayHex), compactProof: toBuffer(proofHex) };
@@ -152,20 +185,14 @@ class OptimisticRollIn {
     return fraudster;
   }
 
+  // GETTER: Returns the computed account state
+  get accountState() {
+    return hashPacked([this._state.callDataTree.root, this._state.currentState, to32ByteBuffer(this._state.lastTime)]);
+  }
+
   // GETTER: Returns the current state of the account's data
   get currentState() {
     return this._state.currentState;
-  }
-
-  // GETTER: Returns the current state of the account's data
-  get queuedState() {
-    const queueLength = this._queue.newStates.length;
-    return queueLength ? this._queue.newStates[queueLength - 1] : this._state.currentState;
-  }
-
-  // GETTER: Returns the last optimistic time of the account
-  get lastTime() {
-    return this._state.lastTime;
   }
 
   // GETTER: Returns the index of fraud, if it exists
@@ -173,9 +200,20 @@ class OptimisticRollIn {
     return this._state.fraudIndex;
   }
 
-  // GETTER: Returns the computed account state
-  get accountState() {
-    return hashPacked([this._state.callDataTree.root, this._state.currentState, to32ByteBuffer(this._state.lastTime)]);
+  // GETTER: Returns if in optimistic state
+  get isInOptimisticState() {
+    return this._state.lastTime !== 0;
+  }
+
+  // GETTER: Returns the last optimistic time of the account
+  get lastTime() {
+    return this._state.lastTime;
+  }
+
+  // GETTER: Returns the current state of the account's data
+  get queuedState() {
+    const queueLength = this._queue.newStates.length;
+    return queueLength ? this._queue.newStates[queueLength - 1] : this._state.currentState;
   }
 
   // GETTER: Returns the number of optimistic transitions of the account
@@ -185,21 +223,312 @@ class OptimisticRollIn {
   }
 
   // GETTER: Returns if in optimistic state
-  get isInOptimisticState() {
-    // return !this._state.callDataTree.root.equals(to32ByteBuffer(0)) && this._state.lastTime !== 0;
-    return this._state.lastTime !== 0;
-  }
-
-  // GETTER: Returns if in optimistic state
   get transitionsQueued() {
     return this._queue.newStates.length;
   }
 
-  // PRIVATE: Updates the state with empty call data tree, computed new state, and 0 last optimistic time
-  _updateStatePessimistically(newState) {
-    this._state.callDataTree = new MerkleTree([], this._treeOptions);
-    this._state.currentState = newState;
-    this._state.lastTime = 0;
+  // PRIVATE: Returns call data hex needed to call a function, given the current state and args
+  _getCalldata(user, currentState, functionName, args = []) {
+    // TODO: ethers path needs to be tested
+    return this._web3
+      ? this._logicContract.methods[functionName](toHex(user), toHex(currentState), ...args).encodeABI()
+      : this._logicContract.populateTransaction[functionName](toHex(user), toHex(currentState), ...args).data;
+  }
+
+  // PRIVATE: returns the tx input args and logs
+  async _getDataFromOptimisticTx(txId) {
+    const data = this._web3
+      ? (await this._web3.eth.getTransaction(txId)).input
+      : (await this._ethersSigner.getTransaction(txId)).data;
+
+    // TODO: perhaps use web3-ethers instead of ethereum-tx-decoder
+    //       this._web3.eth.abi.decodeParameters(typesArray, hexString);
+    //       this._ethers.utils.defaultAbiCoder.decode(types, data);
+    const decodedData = this._optimismDecoder.decodeFn(data);
+
+    // TODO: ethers path needs to be tested
+    const { logs } = this._web3
+      ? await this._web3.eth.getTransactionReceipt(txId)
+      : await this._ethersSigner.getTransactionReceipt(txId);
+
+    return { decodedData, logs };
+  }
+
+  // PRIVATE: returns if the transition results in the proposed new state
+  async _isValidTransition(suspectHex, callDataHex, newStateHex, options = {}) {
+    const { pureVerifiers } = options;
+
+    // Decode sighash and use from calldata
+    const decodedCallData = this._logicDecoder.decodeFn(callDataHex);
+    const { sighash, user } = decodedCallData;
+
+    // If the user extracted from the calldata does not match, its invalid
+    if (!compareHex(suspectHex, user)) return false;
+
+    try {
+      // If a pure function was provided to compute this locally, then use it
+      if (pureVerifiers?.[sighash]) return pureVerifiers[sighash](decodedCallData, newStateHex);
+
+      // If not, we ned to verify against with the node, which is slower
+      const callObject = { to: this._logicContract.options.address, data: callDataHex };
+
+      // TODO: ethers path needs to be tested
+      return this._web3
+        ? compareHex(await this._web3.eth.call(callObject), newStateHex)
+        : compareHex(await this._ethersSigner.call(callObject), newStateHex);
+    } catch (err) {
+      console.log(err);
+      console.log(err.message);
+    }
+
+    return false;
+  }
+
+  // PRIVATE: performs an optimistic contract call, on-chain
+  _optimisticCall(functionName, args, newState, options) {
+    return this.isInOptimisticState
+      ? this._performOptimistically(functionName, args, newState, options)
+      : this._performOptimisticallyWhileEnteringOptimism(functionName, args, newState, options);
+  }
+
+  // PRIVATE: performs a non-optimistic contract call, on-chain
+  async _pessimisticCall(functionName, args, callOptions) {
+    if (!this.isInOptimisticState) return this._performPessimistically(functionName, args, callOptions);
+
+    const { timestamp } = this._web3
+      ? await this._web3.eth.getBlock(await this._web3.eth.getBlockNumber())
+      : await this._ethersSigner.getBlock(await this._ethersSigner.getBlockNumber());
+
+    assert(timestamp >= this._state.lastTime + this._lockTime, 'In optimistic state and cannot yet exit.');
+
+    return this._performPessimisticallyWhileExitingOptimism(functionName, args, callOptions);
+  }
+
+  // PRIVATE: Optimistically perform batch transitions while already in optimistic state, and update internal state (only for self)
+  async _performBatchOptimistically(functionNames = [], args = [], newStates = [], options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
+    assert(functionNames.length > 0, 'No function calls specified.');
+    assert(functionNames.length === args.length, 'Function and args count mismatch.');
+
+    // Compute the new state from the current state, locally
+    const callDataArray = [];
+    let newState = this._state.currentState;
+
+    for (let i = 0; i < functionNames.length; i++) {
+      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
+      callDataArray.push(toBuffer(callDataHex));
+      newState = newStates[i];
+    }
+
+    // Get the expected new call data tree and append proof
+    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, PROOF_OPTIONS);
+
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods
+      .perform_many_optimistically(
+        toHex(callDataArray),
+        toHex(newState),
+        toHex(proof.root),
+        toHex(proof.compactProof),
+        this._state.lastTime
+      )
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_New_Optimistic_States];
+    assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
+
+    this._updateStateOptimistically(newMerkleTree, newState, Number(returnValues.block_time));
+
+    return { newState, receipt };
+  }
+
+  // PRIVATE: Optimistically perform batch transitions to enter optimistic state, and update internal state (only for self)
+  async _performBatchOptimisticallyWhileEnteringOptimism(functionNames = [], args = [], newStates = [], options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
+    assert(functionNames.length > 0, 'No function calls specified.');
+    assert(functionNames.length === args.length, 'Function and args count mismatch.');
+
+    // Compute the new state from the current state, locally
+    const callDataArray = [];
+    let newState = this._state.currentState;
+
+    for (let i = 0; i < functionNames.length; i++) {
+      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
+      callDataArray.push(toBuffer(callDataHex));
+      newState = newStates[i];
+    }
+
+    // Get the expected new call data tree and append proof
+    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, PROOF_OPTIONS);
+
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods
+      .perform_many_optimistically_and_enter(toHex(callDataArray), toHex(newState), toHex(proof.compactProof))
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_New_Optimistic_States];
+    assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
+
+    this._updateStateOptimistically(newMerkleTree, newState, Number(returnValues.block_time));
+
+    return { newState, receipt };
+  }
+
+  // PRIVATE: Optimistically perform a transition while already in optimistic state, and update internal state (only for self)
+  async _performOptimistically(functionName, args = [], newState, options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
+
+    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
+
+    // Get the expected new call data tree and append proof
+    const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), PROOF_OPTIONS);
+
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods
+      .perform_optimistically(
+        callDataHex,
+        toHex(newState),
+        toHex(proof.root),
+        toHex(proof.compactProof),
+        this._state.lastTime
+      )
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_New_Optimistic_State];
+    assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
+
+    this._updateStateOptimistically(newMerkleTree, newState, Number(returnValues.block_time));
+
+    return { newState, receipt };
+  }
+
+  // PRIVATE: Optimistically perform a transition to enter optimistic state, and update internal state (only for self)
+  async _performOptimisticallyWhileEnteringOptimism(functionName, args = [], newState, options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
+
+    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
+
+    // Get the expected new call data tree and append proof
+    const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), PROOF_OPTIONS);
+
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods
+      .perform_optimistically_and_enter(callDataHex, toHex(newState), toHex(proof.compactProof))
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_New_Optimistic_State];
+    assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
+
+    this._updateStateOptimistically(newMerkleTree, newState, Number(returnValues.block_time));
+
+    return { newState, receipt };
+  }
+
+  // PRIVATE: Non-optimistically perform a transition, and update internal state (only for self)
+  async _performPessimistically(functionName, args = [], options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
+
+    const callDataHex = this._getCalldata(this._state.user, this._state.currentState, functionName, args);
+
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods.perform(callDataHex).send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_New_State];
+    assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
+
+    this._updateStatePessimistically(toBuffer(returnValues.new_state));
+
+    return { newState: returnValues.new_state, receipt };
+  }
+
+  // PRIVATE: Non-optimistically perform a transition to exit optimistic state, and update internal state (only for self)
+  async _performPessimisticallyWhileExitingOptimism(functionName, args = [], options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
+
+    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
+
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods
+      .perform_and_exit(callDataHex, toHex(this._state.callDataTree.root), this._state.lastTime)
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_New_State];
+    assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
+
+    this._updateStatePessimistically(toBuffer(returnValues.new_state));
+
+    return { newState: returnValues.new_state, receipt };
+  }
+
+  // PRIVATE: queues a transition to be broadcasted in batch later
+  _queueCall(functionName, args = [], newState) {
+    this._queue.newStates.push(newState);
+    this._queue.functionNames.push(functionName);
+    this._queue.args.push(args);
+  }
+
+  // PRIVATE: Creates and stores an ORI instance by cloning current instance, and setting account to fraudulent user's data
+  _recordFraud(parameters) {
+    const { suspect } = parameters;
+
+    const options = {
+      oriContract: this._oriContract,
+      logicContract: this._logicContract,
+      sourceAddress: this._sourceAddress,
+      treeOptions: this._treeOptions,
+      optimismDecoder: this._optimismDecoder,
+      logicDecoder: this._logicDecoder,
+      web3: this._web3,
+      ethers: this._ethers,
+      ethersSigner: this._ethersSigner,
+      parentORI: this,
+      requiredBond: this._requiredBond,
+      lockTime: this._lockTime,
+    };
+
+    this._frauds[suspect] = OptimisticRollIn.fraudsterFromProof(parameters, options);
   }
 
   // PRIVATE: Updates the state with new call data tree, new state, and last optimistic time
@@ -209,70 +538,53 @@ class OptimisticRollIn {
     this._state.lastTime = lastTime;
   }
 
-  // PRIVATE: Creates and stores an ORI instance by cloning current instance, and setting account to fraudulent user's data
-  _recordFraud(parameters) {
-    const { suspect } = parameters;
-
-    const options = {
-      oriInstance: this._oriContractInstance,
-      logicInstance: this._logicContractInstance,
-      sourceAddress: this._sourceAddress,
-      treeOptions: this._treeOptions,
-      optimismDecoder: this._optimismDecoder,
-      logicDecoder: this._logicDecoder,
-      web3: this._web3,
-      parentORI: this,
-      requiredBond: this._requiredBond,
-      lockTime: this._lockTime,
-    };
-
-    this._frauds[suspect] = OptimisticRollIn.fraudsterFromProof(parameters, options);
+  // PRIVATE: Updates the state with empty call data tree, computed new state, and 0 last optimistic time
+  _updateStatePessimistically(newState) {
+    this._state.callDataTree = new MerkleTree([], this._treeOptions);
+    this._state.currentState = newState;
+    this._state.lastTime = 0;
   }
 
-  async _isValidTransition(suspectHex, callDataHex, newStateHex, options = {}) {
-    const { pureVerifiers } = options;
-
-    // Decode sighash and use from calldata
-    const decodedCallData = this._logicDecoder.decodeFn(callDataHex);
-    const { sighash, user } = decodedCallData;
-
-    // If the user extracted from the calldata does not match, its invalid
-    if (suspectHex.toLowerCase() !== user.toLowerCase()) return false;
-
-    try {
-      // If a pure function was provided to compute this locally, then use it
-      if (pureVerifiers?.[sighash]) return pureVerifiers[sighash](decodedCallData, newStateHex);
-
-      // If not, we ned to verify against with the node, which is slower
-      const callObject = { to: this._logicContractInstance.address, data: callDataHex };
-      return (await this._web3.eth.call(callObject)) === newStateHex;
-    } catch (err) {
-      console.log(err);
-      console.log(err.message);
-    }
-
-    return false;
-  }
-
-  // PRIVATE: Verifies an optimistic transition, and creates a fraudster ORI if fraud is found
-  async _verifyTransition(suspectHex, decodedOptimismData, lastTime, options) {
+  // PRIVATE: Updates internal account given some new batch optimistic transitions
+  _updateWithBatchTransitions(decodedOptimismData, lastTime) {
     // Decode the optimism input data
-    const { call_data: callDataHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
+    const {
+      call_data: callDataArrayHex,
+      new_state: newStateHex,
+      call_data_root: callDataRootHex,
+      last_time: originalLastTimeBN,
+    } = decodedOptimismData;
 
-    if (await this._isValidTransition(suspectHex, callDataHex, newStateHex, options)) {
-      return { valid: true, user: suspectHex };
-    }
+    assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
+    assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
 
-    this._recordFraud({
-      suspect: suspectHex,
-      fraudIndex: 0,
-      callDataArrayHex: [callDataHex],
-      newStateHex,
-      proofHex,
-      lastTime,
-    });
+    // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
+    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataArrayHex[0]);
+    assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
 
-    return { valid: false, user: suspectHex };
+    const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataArrayHex));
+    this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
+  }
+
+  // PRIVATE: Updates internal account given some new optimistic transition
+  _updateWithTransition(decodedOptimismData, lastTime) {
+    // Decode the optimism input data
+    const {
+      call_data: callDataHex,
+      new_state: newStateHex,
+      call_data_root: callDataRootHex,
+      last_time: originalLastTimeBN,
+    } = decodedOptimismData;
+
+    assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
+    assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
+
+    // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
+    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataHex);
+    assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
+
+    const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataHex));
+    this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
   }
 
   // PRIVATE: Verifies batch optimistic transitions, and creates a fraudster ORI if fraud is found
@@ -304,305 +616,36 @@ class OptimisticRollIn {
     return { valid: true, user: suspectHex };
   }
 
-  // PRIVATE: Updates internal account given some new optimistic transition
-  _updateWithTransition(decodedOptimismData, lastTime) {
+  // PRIVATE: Verifies an optimistic transition, and creates a fraudster ORI if fraud is found
+  async _verifyTransition(suspectHex, decodedOptimismData, lastTime, options) {
     // Decode the optimism input data
-    const {
-      call_data: callDataHex,
-      new_state: newStateHex,
-      call_data_root: callDataRootHex,
-      last_time: originalLastTimeBN,
-    } = decodedOptimismData;
+    const { call_data: callDataHex, new_state: newStateHex, proof: proofHex } = decodedOptimismData;
 
-    assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
-    assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
-
-    // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
-    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataHex);
-    assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
-
-    const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataHex));
-    this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
-  }
-
-  // PRIVATE: Updates internal account given some new batch optimistic transitions
-  _updateWithBatchTransitions(decodedOptimismData, lastTime) {
-    // Decode the optimism input data
-    const {
-      call_data: callDataArrayHex,
-      new_state: newStateHex,
-      call_data_root: callDataRootHex,
-      last_time: originalLastTimeBN,
-    } = decodedOptimismData;
-
-    assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
-    assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
-
-    // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
-    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataArrayHex[0]);
-    assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
-
-    const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataArrayHex));
-    this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
-  }
-
-  // PRIVATE: Non-optimistically perform a transition, and update internal state (only for self)
-  async _performPessimistically(functionName, args = [], options = {}) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    const { value = '0' } = options;
-
-    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
-
-    const result = await this._oriContractInstance.perform(callDataHex, { from: this._sourceAddress, value });
-
-    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_State');
-
-    const newState = toBuffer(oriLog.args[1]);
-
-    this._updateStatePessimistically(newState);
-
-    return Object.assign({ newState }, result);
-  }
-
-  // PRIVATE: Non-optimistically perform a transition to exit optimistic state, and update internal state (only for self)
-  async _performPessimisticallyWhileExitingOptimism(functionName, args = [], options = {}) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    const { value = '0' } = options;
-
-    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
-
-    const result = await this._oriContractInstance.perform_and_exit(
-      callDataHex,
-      toHex(this._state.callDataTree.root),
-      this._state.lastTime,
-      { from: this._sourceAddress, value }
-    );
-
-    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_State');
-
-    const newState = toBuffer(oriLog.args[1]);
-
-    this._updateStatePessimistically(newState);
-
-    return Object.assign({ newState }, result);
-  }
-
-  // PRIVATE: Optimistically perform a transition to enter optimistic state, and update internal state (only for self)
-  async _performOptimisticallyWhileEnteringOptimism(functionName, args = [], newState) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
-
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), PROOF_OPTIONS);
-
-    const result = await this._oriContractInstance.perform_optimistically_and_enter(
-      callDataHex,
-      toHex(newState),
-      toHex(proof.compactProof),
-      { from: this._sourceAddress }
-    );
-
-    const oriLog = result.receipt.logs.find(({ event }) => event === EVENTS.ORI_New_Optimistic_State);
-
-    const lastTime = parseInt(oriLog.args[1], 10);
-
-    this._updateStateOptimistically(newMerkleTree, newState, lastTime);
-
-    return Object.assign({ newState }, result);
-  }
-
-  // PRIVATE: Optimistically perform a transition while already in optimistic state, and update internal state (only for self)
-  async _performOptimistically(functionName, args = [], newState) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-
-    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
-
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), PROOF_OPTIONS);
-
-    const result = await this._oriContractInstance.perform_optimistically(
-      callDataHex,
-      toHex(newState),
-      toHex(proof.root),
-      toHex(proof.compactProof),
-      this._state.lastTime,
-      { from: this._sourceAddress }
-    );
-
-    const oriLog = result.receipt.logs.find(({ event }) => event === EVENTS.ORI_New_Optimistic_State);
-
-    const lastTime = parseInt(oriLog.args[1], 10);
-
-    this._updateStateOptimistically(newMerkleTree, newState, lastTime);
-
-    return Object.assign({ newState }, result);
-  }
-
-  // PRIVATE: Optimistically perform batch transitions while already in optimistic state, and update internal state (only for self)
-  async _performBatchOptimistically(functionNames = [], args = [], newStates = []) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-    assert(functionNames.length > 0, 'No function calls specified.');
-    assert(functionNames.length === args.length, 'Function and args count mismatch.');
-
-    // Compute the new state from the current state, locally
-    const callDataArray = [];
-    let newState = this._state.currentState;
-
-    for (let i = 0; i < functionNames.length; i++) {
-      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
-      callDataArray.push(toBuffer(callDataHex));
-      newState = newStates[i];
+    if (await this._isValidTransition(suspectHex, callDataHex, newStateHex, options)) {
+      return { valid: true, user: suspectHex };
     }
 
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, PROOF_OPTIONS);
+    this._recordFraud({
+      suspect: suspectHex,
+      fraudIndex: 0,
+      callDataArrayHex: [callDataHex],
+      newStateHex,
+      proofHex,
+      lastTime,
+    });
 
-    const result = await this._oriContractInstance.perform_many_optimistically(
-      toHex(callDataArray),
-      toHex(newState),
-      toHex(proof.root),
-      toHex(proof.compactProof),
-      this._state.lastTime,
-      { from: this._sourceAddress }
-    );
-
-    const oriLog = result.receipt.logs.find(({ event }) => event === EVENTS.ORI_New_Optimistic_States);
-
-    const lastTime = parseInt(oriLog.args[1], 10);
-
-    this._updateStateOptimistically(newMerkleTree, newState, lastTime);
-
-    return Object.assign({ newState }, result);
-  }
-
-  // PRIVATE: Optimistically perform batch transitions to enter optimistic state, and update internal state (only for self)
-  async _performBatchOptimisticallyWhileEnteringOptimism(functionNames = [], args = [], newStates = []) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-    assert(functionNames.length > 0, 'No function calls specified.');
-    assert(functionNames.length === args.length, 'Function and args count mismatch.');
-
-    // Compute the new state from the current state, locally
-    const callDataArray = [];
-    let newState = this._state.currentState;
-
-    for (let i = 0; i < functionNames.length; i++) {
-      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
-      callDataArray.push(toBuffer(callDataHex));
-      newState = newStates[i];
-    }
-
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, PROOF_OPTIONS);
-
-    const result = await this._oriContractInstance.perform_many_optimistically_and_enter(
-      toHex(callDataArray),
-      toHex(newState),
-      toHex(proof.compactProof),
-      { from: this._sourceAddress }
-    );
-
-    const oriLog = result.receipt.logs.find(({ event }) => event === EVENTS.ORI_New_Optimistic_States);
-
-    const lastTime = parseInt(oriLog.args[1], 10);
-
-    this._updateStateOptimistically(newMerkleTree, newState, lastTime);
-
-    return Object.assign({ newState }, result);
-  }
-
-  // PRIVATE: performs a non-optimistic contract call, on-chain
-  async _pessimisticCall(functionName, args, options) {
-    // if in optimism and can't exit yet, throw
-    assert(this.isInOptimisticState || (await this.canExit()), 'In optimistic state and cannot yet exit.');
-
-    // if in optimism and can exit, perform and exit
-    if (this.isInOptimisticState) return this._performPessimisticallyWhileExitingOptimism(functionName, args, options);
-
-    // if not in optimism, perform
-    return this._performPessimistically(functionName, args, options);
-  }
-
-  // PRIVATE: performs an optimistic contract call, on-chain
-  _optimisticCall(functionName, args, newState) {
-    // if not in optimism, perform and enter
-    if (!this.isInOptimisticState)
-      return this._performOptimisticallyWhileEnteringOptimism(functionName, args, newState);
-
-    // if in optimism, perform optimistically
-    return this._performOptimistically(functionName, args, newState);
-  }
-
-  // PRIVATE: queues a transition to be broadcasted in batch later
-  _queueCall(functionName, args = [], newState) {
-    this._queue.newStates.push(newState);
-    this._queue.functionNames.push(functionName);
-    this._queue.args.push(args);
-  }
-
-  // PRIVATE: Returns call data hex needed to call a function, given the current state and args
-  async _getCalldata(user, currentState, functionName, args = []) {
-    // Get the call logic contract address and call data from a logic request
-
-    // TODO: this can and should be done locally and synchronously (use web3 or ether contracts)
-    const { data: callDataHex } = await this._logicContractInstance[functionName].request(
-      toHex(user),
-      toHex(currentState),
-      ...args,
-      { from: this._sourceAddress }
-    );
-
-    return callDataHex;
+    return { valid: false, user: suspectHex };
   }
 
   // PUBLIC: Bonds the user's account, using the source address (which may be the same as the user)
   async bond() {
-    const bondAmount = await this._oriContractInstance.balances(this._sourceAddress);
-    const amountRequired = this._requiredBond - BigInt(bondAmount.toString());
-    assert(amountRequired > 0, 'Bond not required.');
+    const amountRequired = this._requiredBond - (await this.getBalance());
+    assert(amountRequired > 0n, 'Bond not required.');
 
     const callOptions = { value: amountRequired.toString(), from: this._sourceAddress };
-    return this._oriContractInstance.bond(this._state.user, callOptions);
-  }
+    const receipt = await this._oriContract.methods.bond(this._state.user).send(callOptions);
 
-  // PUBLIC: Initialize the on-chain account and the internal state (only for self)
-  async initialize(options = {}) {
-    assert(this._sourceAddress === this._state.user, 'Can only initialize own account.');
-    assert(!(await this.getAccountState()), 'Already Initialized.');
-
-    const { deposit = '0' } = options;
-
-    const bondAmount = await this._oriContractInstance.balances(this._sourceAddress);
-    const amountRequired = this._requiredBond - BigInt(bondAmount.toString());
-    const additionalBond = amountRequired > 0 ? amountRequired.toString() : '0';
-
-    const value = (BigInt(deposit) + BigInt(additionalBond)).toString();
-    const callOptions = { value, from: this._sourceAddress };
-    const result = await this._oriContractInstance.initialize(callOptions);
-
-    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_New_State');
-
-    this._updateStatePessimistically(toBuffer(oriLog.args[1]));
-
-    return result;
-  }
-
-  // PUBLIC: Rolls the entire transition queue into a single transaction and broadcasts (only for self)
-  async sendQueue() {
-    // if in optimism, perform optimistically, else, perform and enter
-    const result = this.isInOptimisticState
-      ? await this._performBatchOptimistically(this._queue.functionNames, this._queue.args, this._queue.newStates)
-      : await this._performBatchOptimisticallyWhileEnteringOptimism(
-          this._queue.functionNames,
-          this._queue.args,
-          this._queue.newStates
-        );
-
-    this.clearQueue();
-
-    return result;
+    return { receipt };
   }
 
   // PUBLIC: Clear the queued transitions
@@ -612,94 +655,146 @@ class OptimisticRollIn {
     this._queue.args.length = 0;
   }
 
+  // PUBLIC: Delete internal fraudster object
+  deleteFraudster(user) {
+    this._frauds[user] = null;
+  }
+
+  // PUBLIC: Returns the account user's balance (on chain)
+  async getAccountState(user = this._state.user) {
+    const accountState = await this._oriContract.methods.account_states(user).call();
+
+    return accountState === ZERO_BYTES_32 ? null : toBuffer(accountState);
+  }
+
+  // PUBLIC: Returns the account user's balance (on chain)
+  async getBalance(user = this._state.user) {
+    const balance = await this._oriContract.methods.balances(user).call();
+
+    return BigInt(balance.toString());
+  }
+
   // PUBLIC: Returns an ORI instance (if exists) for a fraudulent user's address
   getFraudster(user) {
     return this._frauds[user.toLowerCase()];
   }
 
+  // PUBLIC: Returns the locked of this account, if any (on chain)
+  async getLocker(user = this._state.user) {
+    const locker = await this._oriContract.methods.lockers(user).call();
+
+    return compareHex(locker, ZERO_ADDRESS) ? null : locker;
+  }
+
+  // PUBLIC: Returns lock time for the account (on chain)
+  async getLockTimestamp(user = this._state.user) {
+    const lockTimestamp = await this._oriContract.methods.locked_timestamps(user).call();
+
+    return Number(lockTimestamp);
+  }
+
+  // PUBLIC: Returns the rollback size that the account needs to be rolled back to (on chain)
+  async getRollbackSize(user = this._state.user) {
+    const rollbackSize = await this._oriContract.methods.rollback_sizes(user).call();
+
+    return Number(rollbackSize);
+  }
+
+  // PUBLIC: Returns approximate time remaining until account can exit optimism (on chain)
+  async getLockTimeRemaining(user = this._state.user) {
+    const { timestamp } = this._web3
+      ? await this._web3.eth.getBlock(await this._web3.eth.getBlockNumber())
+      : await this._ethersSigner.getBlock(await this._ethersSigner.getBlockNumber());
+
+    const timeRemaining = timestamp - ((await this.getLockTimestamp(user)) + this._lockTime);
+
+    return timeRemaining > 0 ? timeRemaining : 0;
+  }
+
+  // PUBLIC: Initialize the on-chain account and the internal state (only for self)
+  async initialize(options = {}) {
+    const { deposit = '0', from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only initialize own account.');
+    assert(!(await this.getAccountState()), 'Already Initialized.');
+
+    const amountRequired = this._requiredBond - (await this.getBalance());
+    const additionalBond = amountRequired > 0n ? amountRequired : 0n;
+    const value = (BigInt(deposit) + additionalBond).toString();
+
+    const callOptions = { from, value };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods.initialize().send(callOptions);
+
+    assert(receipt.events[EVENTS.ORI_New_State].returnValues.user === this._state.user, 'Unexpected user.');
+
+    const newState = receipt.events[EVENTS.ORI_New_State].returnValues.new_state;
+    this._updateStatePessimistically(toBuffer(newState));
+
+    return { newState, receipt };
+  }
+
+  // PUBLIC: Returns whether the account is in an optimistic state (on chain)
+  async checkIsInOptimisticState(user = this._state.user, currentState = this._state.currentState) {
+    const accountState = await this.getAccountState(user);
+
+    if (!accountState) false;
+
+    return hashPacked([to32ByteBuffer(0), currentState, to32ByteBuffer(0)]).equals(accountState);
+  }
+
   // PUBLIC: Locks user's account, from the source address (which may be the same as the user)
-  async lock() {
+  async lock(options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
     assert(!(await this.getLocker()), 'Account already locked.');
 
-    const bondAmount = await this._oriContractInstance.balances(this._sourceAddress);
-    const amountRequired = this._requiredBond - BigInt(bondAmount.toString());
-    const value = amountRequired > 0 ? amountRequired.toString() : '0';
-    const callOptions = { value, from: this._sourceAddress };
+    const amountRequired = this._requiredBond - (await this.getBalance(from));
+    const value = amountRequired > 0n ? amountRequired.toString() : '0';
+    const callOptions = { from, value, gas: gas ?? 140000 };
+    const receipt = await this._oriContract.methods.lock(this._state.user).send(callOptions);
 
-    return this._oriContractInstance.lock_user(this._state.user, callOptions);
-  }
+    const { returnValues } = receipt.events[EVENTS.ORI_Locked];
+    assert(compareHex(returnValues.accuser, this._sourceAddress), 'Unexpected accuser.');
+    assert(compareHex(returnValues.suspect, this._state.user), 'Unexpected suspect.');
 
-  // PUBLIC: Updates the internal state given an optimistic tx
-  async update(txId) {
-    // TODO: should not update unless its a fraudster (partial merkle tree)
-
-    // Pull the transaction containing the suspected fraudulent transition
-    const tx = await this._web3.eth.getTransaction(txId);
-    const decodedOptimismData = this._optimismDecoder.decodeFn(tx.input);
-    const { sighash } = decodedOptimismData;
-
-    // Pull the transaction receipt containing the suspected fraudulent transition's logs
-    const receipt = await this._web3.eth.getTransactionReceipt(txId);
-
-    const oriLog = receipt.logs.find(({ topics }) =>
-      [TOPICS.ORI_New_Optimistic_State, TOPICS.ORI_New_Optimistic_States].includes(topics[0])
-    );
-
-    assert(prefix(oriLog.topics[1].slice(26)) === this._state.user, 'User mismatch.');
-
-    const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
-
-    if ([SIG_HASHES.PerformManyOptimisticallyAndEnter, SIG_HASHES.PerformManyOptimistically].includes(sighash)) {
-      return this._updateWithBatchTransitions(decodedOptimismData, lastTime);
-    }
-
-    if ([SIG_HASHES.PerformOptimisticallyAndEnter, SIG_HASHES.PerformOptimistically].includes(sighash)) {
-      return this._updateWithTransition(decodedOptimismData, lastTime);
-    }
-
-    return;
-  }
-
-  // PUBLIC: Verifies the transitions(s) of an optimistic tx, and creates a fraudster ORI if fraud is found
-  async verifyTransaction(txId, options) {
-    // Pull the transaction containing the suspected fraudulent transition
-    const tx = await this._web3.eth.getTransaction(txId);
-    const decodedOptimismData = this._optimismDecoder.decodeFn(tx.input);
-    const { sighash } = decodedOptimismData;
-
-    // Pull the transaction receipt containing the suspected fraudulent transition's logs
-    const receipt = await this._web3.eth.getTransactionReceipt(txId);
-
-    const oriLog = receipt.logs.find(({ topics }) =>
-      [TOPICS.ORI_New_Optimistic_State, TOPICS.ORI_New_Optimistic_States].includes(topics[0])
-    );
-
-    const suspectHex = prefix(oriLog.topics[1].slice(26));
-    const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
-
-    return [SIG_HASHES.PerformManyOptimisticallyAndEnter, SIG_HASHES.PerformManyOptimistically].includes(sighash)
-      ? await this._verifyBatchTransitions(suspectHex, decodedOptimismData, lastTime, options)
-      : [SIG_HASHES.PerformOptimisticallyAndEnter, SIG_HASHES.PerformOptimistically]
-      ? await this._verifyTransition(suspectHex, decodedOptimismData, lastTime, options)
-      : { valid: true };
+    return { receipt };
   }
 
   // PUBLIC: Submit proof to ORI contract that account user committed fraud
-  async proveFraud() {
+  async proveFraud(options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
     // Build a Multi Proof for the call data of the fraudulent transition
     const indices = [this._state.fraudIndex, this._state.fraudIndex + 1];
     const { root, elements, compactProof } = this._state.callDataTree.generateMultiProof(indices, PROOF_OPTIONS);
 
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
     // Prove the fraud
-    const result = await this._oriContractInstance.prove_fraud(
-      this._state.user,
-      toHex(elements),
-      toHex(this._state.currentState),
-      toHex(root),
-      toHex(compactProof),
-      this._state.lastTime,
-      { from: this._sourceAddress }
-    );
+    const receipt = await this._oriContract.methods
+      .prove_fraud(
+        this._state.user,
+        toHex(elements),
+        toHex(this._state.currentState),
+        toHex(root),
+        toHex(compactProof),
+        this._state.lastTime
+      )
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_Fraud_Proven];
+    assert(compareHex(returnValues.accuser, this._sourceAddress), 'Unexpected accuser.');
+    assert(compareHex(returnValues.suspect, this._state.user), 'Unexpected suspect.');
+    assert(Number(returnValues.transition_index) === this._state.fraudIndex, 'Unexpected index.');
 
     // TODO: This is just a hack to prevent re-proving fraud after the first success
     this._state.fraudIndex = null;
@@ -708,28 +803,20 @@ class OptimisticRollIn {
       this._parentORI.deleteFraudster(this._state.user);
     }
 
-    return result;
-  }
-
-  // PUBLIC: Delete internal fraudster object
-  deleteFraudster(user) {
-    this._frauds[user] = null;
-  }
-
-  // PUBLIC: Unbonds the user's account to some destination
-  unbond(destination) {
-    return this._oriContractInstance.unbond(destination, { from: this._sourceAddress });
+    return { receipt };
   }
 
   // PUBLIC: Rollback optimistic state (and thus calldata tree) to right before the fraud index
-  async rollback() {
+  async rollback(options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(compareHex(from, this._state.user), 'Can only rollback own account.');
+
     const index = await this.getRollbackSize();
     assert(index < this.transitionCount, 'Unexpected rollback index.');
 
-    const bondAmount = await this._oriContractInstance.balances(this._sourceAddress);
-    const amountRequired = this._requiredBond - BigInt(bondAmount.toString());
-    const value = amountRequired > 0 ? amountRequired.toString() : '0';
-    const callOptions = { value, from: this._sourceAddress };
+    const amountRequired = this._requiredBond - (await this.getBalance());
+    const value = amountRequired > 0n ? amountRequired.toString() : '0';
 
     // Need to create a call data Merkle Tree of all pre-invalid-transition call data
     // Note: rollbackSize is a bad name. Its really the expected size of the tree after the rollback is performed
@@ -742,85 +829,143 @@ class OptimisticRollIn {
     const { proof } = oldCallDataTree.appendMulti(rolledBackCallDataArray, PROOF_OPTIONS);
     const { root: oldRoot, compactProof: appendProof } = proof;
 
-    // Suspect needs to prove to the current size of the on-chain call data tree
+    // User needs to prove to the current size of the on-chain call data tree
     const { root, elementCount, elementRoot: sizeProof } = this._state.callDataTree.generateSizeProof(PROOF_OPTIONS);
 
-    // Suspect performs the rollback while bonding new coin at the same time
-    const result = await this._oriContractInstance.rollback(
-      toHex(oldRoot),
-      toHex(rolledBackCallDataArray),
-      toHex(appendProof),
-      elementCount,
-      toHex(sizeProof),
-      toHex(root),
-      toHex(this._state.currentState),
-      this._state.lastTime,
-      callOptions
-    );
+    const callOptions = { from, value };
 
-    const oriLog = result.receipt.logs.find(({ event }) => event === 'ORI_Rolled_Back');
+    if (gas) {
+      callOptions.gas = gas;
+    }
 
-    const lastTime = parseInt(oriLog.args[2], 10);
+    // User performs the rollback while bonding new coin at the same time
+    const receipt = await this._oriContract.methods
+      .rollback(
+        toHex(oldRoot),
+        toHex(rolledBackCallDataArray),
+        toHex(appendProof),
+        elementCount,
+        toHex(sizeProof),
+        toHex(root),
+        toHex(this._state.currentState),
+        this._state.lastTime
+      )
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_Rolled_Back];
+    assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
+    assert(returnValues.tree_size.toString() === index.toString(), 'Unexpected tree size.');
 
     const currentState = rolledBackCallDataArray[0].slice(36, 68);
-    this._updateStateOptimistically(oldCallDataTree, currentState, lastTime);
+    this._updateStateOptimistically(oldCallDataTree, currentState, Number(returnValues.block_time));
 
     // TODO: this is weird, because this isn't here for the suspect's own ori instance
     this._state.fraudIndex = null;
 
+    return { newState: currentState, receipt };
+  }
+
+  // PUBLIC: Rolls the entire transition queue into a single transaction and broadcasts (only for self)
+  async sendQueue(options = {}) {
+    // if in optimism, perform optimistically, else, perform and enter
+    const result = this.isInOptimisticState
+      ? await this._performBatchOptimistically(
+          this._queue.functionNames,
+          this._queue.args,
+          this._queue.newStates,
+          options
+        )
+      : await this._performBatchOptimisticallyWhileEnteringOptimism(
+          this._queue.functionNames,
+          this._queue.args,
+          this._queue.newStates,
+          options
+        );
+
+    this.clearQueue();
+
     return result;
   }
 
-  // PUBLIC: Returns the account user's balance (on chain)
-  getBalance() {
-    return this._oriContractInstance.balances(this._state.user);
+  // PUBLIC: Unbonds the user's account to some destination
+  async unbond(destination, options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    const callOptions = { from };
+
+    if (gas) {
+      callOptions.gas = gas;
+    }
+
+    const receipt = await this._oriContract.methods.unbond(destination).send(callOptions);
+
+    return { receipt };
   }
 
-  // PUBLIC: Returns the account user's balance (on chain)
-  async getAccountState() {
-    const accountState = await this._oriContractInstance.account_states(this._state.user);
+  // PUBLIC: Updates the internal state given an optimistic tx
+  async update(txId) {
+    const { decodedData, logs } = await this._getDataFromOptimisticTx(txId);
+    const { sighash } = decodedData;
 
-    return accountState === ZERO_BYTES_32 ? null : accountState;
+    const oriLog = logs.find(({ topics }) =>
+      [TOPICS.ORI_New_Optimistic_State, TOPICS.ORI_New_Optimistic_States].includes(topics[0])
+    );
+
+    // TODO: should also not update unless its a fraudster (partial merkle tree)
+    assert(compareHex(prefix(oriLog.topics[1].slice(26)), this._state.user), 'User mismatch.');
+
+    const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
+
+    if ([SIG_HASHES.PerformManyOptimisticallyAndEnter, SIG_HASHES.PerformManyOptimistically].includes(sighash)) {
+      return this._updateWithBatchTransitions(decodedData, lastTime);
+    }
+
+    if ([SIG_HASHES.PerformOptimisticallyAndEnter, SIG_HASHES.PerformOptimistically].includes(sighash)) {
+      return this._updateWithTransition(decodedData, lastTime);
+    }
   }
 
-  // PUBLIC: Returns the rollback size that the account needs to be rolled back to (on chain)
-  getRollbackSize() {
-    return this._oriContractInstance.rollback_sizes(this._state.user);
+  // PUBLIC: Unlock account, from the source address (which may be the same as the user)
+  async unlock(options = {}) {
+    const { from = this._sourceAddress, gas } = options;
+
+    assert(await this.getLocker(), 'Account already unlocked.');
+
+    const callOptions = { from, value, gas: gas ?? 100000 };
+    const receipt = await this._oriContract.methods
+      .unlock(
+        this._state.user,
+        toHex(this._state.currentState),
+        toHex(this._state.callDataTree.root),
+        this._state.lastTime
+      )
+      .send(callOptions);
+
+    const { returnValues } = receipt.events[EVENTS.ORI_Unlocked];
+    assert(compareHex(returnValues.suspect, this._state.user), 'Unexpected suspect.');
+
+    this._state.lastTime = Number(returnValues.block_time);
+
+    return { receipt };
   }
 
-  // PUBLIC: Returns whether the account is in an optimistic state (on chain)
-  async getIsInOptimisticState() {
-    const accountState = await getAccountState();
+  // PUBLIC: Verifies the transitions(s) of an optimistic tx, and creates a fraudster ORI if fraud is found
+  async verifyTransaction(txId, options) {
+    const { decodedData, logs } = await this._getDataFromOptimisticTx(txId);
+    const { sighash } = decodedData;
 
-    if (!accountState) false;
+    const oriLog = logs.find(({ topics }) =>
+      [TOPICS.ORI_New_Optimistic_State, TOPICS.ORI_New_Optimistic_States].includes(topics[0])
+    );
 
-    return hashPacked([to32ByteBuffer(0), this._state.currentState, to32ByteBuffer(0)]).equals(accountState);
-  }
+    const suspectHex = prefix(oriLog.topics[1].slice(26));
+    const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
 
-  // PUBLIC: Returns lock time for the account (on chain)
-  getLockTimestamp() {
-    return this._oriContractInstance.locked_timestamps(this._state.user);
-  }
-
-  // PUBLIC: Returns approximate time remaining until account can exit optimism (on chain)
-  async getTimeLeftToPessimism() {
-    const currentBlockNumber = await this._web3.eth.getBlockNumber();
-    const { timestamp } = await this._web3.eth.getBlock(currentBlockNumber);
-    const lockTimestamp = await this.getLockTimestamp();
-
-    return timestamp - (lockTimestamp.toNumber() + this._lockTime);
-  }
-
-  // PUBLIC: Returns if can exit optimism (on chain)
-  async canExit() {
-    return (await this.getTimeLeftToPessimism()) > 0;
-  }
-
-  // PUBLIC: Returns the locked of this account, if any (on chain)
-  async getLocker() {
-    const locker = await this._oriContractInstance.lockers(this._state.user);
-
-    return locker === ZERO_ADDRESS ? null : locker;
+    return [SIG_HASHES.PerformManyOptimisticallyAndEnter, SIG_HASHES.PerformManyOptimistically].includes(sighash)
+      ? await this._verifyBatchTransitions(suspectHex, decodedData, lastTime, options)
+      : [SIG_HASHES.PerformOptimisticallyAndEnter, SIG_HASHES.PerformOptimistically]
+      ? await this._verifyTransition(suspectHex, decodedData, lastTime, options)
+      : { valid: true };
   }
 }
 

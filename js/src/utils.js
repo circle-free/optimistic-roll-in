@@ -83,6 +83,8 @@ const toBigInt = (value) => {
   throw Error('Invalid input type');
 };
 
+const compareHex = (a, b) => a.toLowerCase() === b.toLowerCase();
+
 module.exports = {
   leftPad,
   to32ByteBuffer,
@@ -93,4 +95,5 @@ module.exports = {
   toHex,
   toBuffer,
   toBigInt,
+  compareHex,
 };

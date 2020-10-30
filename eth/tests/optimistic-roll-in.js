@@ -8,6 +8,8 @@ const SomeLogicContractArtifact = artifacts.require('Some_Logic_Contract');
 const OptimisticRollIn = require('../../js/src');
 const { to32ByteBuffer, hashPacked, toHex, toBuffer } = require('../../js/src/utils');
 
+// TODO: test DOS lock and unlock
+
 const somePureTransition = (_user, _currentState, _arg) => {
   const user = toBuffer(_user);
   const currentState = toBuffer(_currentState);
@@ -73,6 +75,23 @@ const advanceTime = (time) => {
   });
 };
 
+const advanceBlock = () => {
+  return new Promise((resolve, reject) => {
+    web3.currentProvider.send(
+      {
+        jsonrpc: '2.0',
+        method: 'evm_mine',
+        id: new Date().getTime(),
+      },
+      (err, result) => {
+        if (err) return reject(err);
+
+        return resolve(result);
+      }
+    );
+  });
+};
+
 const someDelay = (seconds) => {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 };
@@ -103,15 +122,21 @@ contract('Optimistic Roll In', (accounts) => {
       optimismContractInstance = await OptimisticRollInArtifact.deployed();
       optimismAddress = optimismContractInstance.address;
 
-      const network = await web3.eth.net.getId();
+      const contracts = {
+        oriAddress: optimismAddress,
+        oriABI: optimismContractInstance.abi,
+        logicAddress,
+        logicABI: logicContractInstance.abi,
+      };
 
+      const network = await web3.eth.net.getId();
       requiredBond = network === 5777 ? '1000000000000000000' : '10000000000000';
       lockTime = network === 5777 ? '600' : '60';
       const oriOptions = { treeOptions: { elementPrefix: '00' }, web3, requiredBond, lockTime };
 
-      suspectOptimist = new OptimisticRollIn(optimismContractInstance, logicContractInstance, suspect, oriOptions);
+      suspectOptimist = new OptimisticRollIn(suspect, contracts, oriOptions);
 
-      accuserOptimist = new OptimisticRollIn(optimismContractInstance, logicContractInstance, accuser, oriOptions);
+      accuserOptimist = new OptimisticRollIn(accuser, contracts, oriOptions);
     });
 
     it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
@@ -131,24 +156,20 @@ contract('Optimistic Roll In', (accounts) => {
 
     it('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
       suspectDepositAmount = '500000000000000000';
-      const options = { deposit: suspectDepositAmount };
-      const { receipt, logs } = await suspectOptimist.initialize(options);
+      const options = { deposit: suspectDepositAmount, gas: 60000 };
+      const { receipt } = await suspectOptimist.initialize(options);
       const accountState = await suspectOptimist.getAccountState();
       const bondBalance = await suspectOptimist.getBalance();
       const logicBalance = await web3.eth.getBalance(logicAddress);
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
 
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
       expect(bondBalance.toString()).to.equal(suspectBondAmount);
       expect(logicBalance.toString()).to.equal(suspectDepositAmount);
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
 
-      expect(logs[0].event).to.equal('ORI_New_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
-
-      if (receipt.gasUsed !== 53636) {
-        console.log(`Not Critical, but we expected gas used for [ 2] to be 53636, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 53679) {
+        console.log(`Not Critical, but we expected gas used for [ 2] to be 53679, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -156,17 +177,14 @@ contract('Optimistic Roll In', (accounts) => {
       const someArg = generateElements(1, { seed: '11' })[0];
 
       const callArgs = [toHex(someArg)];
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.normal(callArgs);
+      const callOptions = { gas: 300000 };
+      const { receipt } = await suspectOptimist.some_pure_transition.normal(callArgs, callOptions);
       const accountState = await suspectOptimist.getAccountState();
 
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      expect(logs[0].event).to.equal('ORI_New_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
-
-      if (receipt.gasUsed !== 289277) {
-        console.log(`Not Critical, but we expected gas used for [ 3] to be 289277, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 289255) {
+        console.log(`Not Critical, but we expected gas used for [ 3] to be 289255, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -175,15 +193,13 @@ contract('Optimistic Roll In', (accounts) => {
 
       const callArgs = [toHex(someArg)];
       const newState = somePureTransition(suspect, suspectOptimist.currentState, someArg);
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState);
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 40000 };
+      const { receipt } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState, callOptions);
       suspectLastTxId = receipt.transactionHash;
 
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
+      const accountState = await suspectOptimist.getAccountState();
 
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 34351) {
         console.log(`Not Critical, but we expected gas used for [ 4] to be 34351, but got ${receipt.gasUsed}`);
@@ -202,15 +218,13 @@ contract('Optimistic Roll In', (accounts) => {
 
       const callArgs = [toHex(someArg)];
       const newState = somePureTransition(suspect, suspectOptimist.currentState, someArg);
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState);
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 40000 };
+      const { receipt } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState, callOptions);
       suspectLastTxId = receipt.transactionHash;
 
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
+      const accountState = await suspectOptimist.getAccountState();
 
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 36158) {
         console.log(`Not Critical, but we expected gas used for [ 6] to be 36158, but got ${receipt.gasUsed}`);
@@ -236,20 +250,17 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
-      const { receipt, logs } = await suspectOptimist.sendQueue();
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 340000 };
+      const { receipt } = await suspectOptimist.sendQueue(callOptions);
       suspectLastTxId = receipt.transactionHash;
 
+      const accountState = await suspectOptimist.getAccountState();
+
       expect(suspectOptimist.transitionsQueued).to.equal(0);
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
-
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-
-      if (receipt.gasUsed !== 324747) {
-        console.log(`Not Critical, but we expected gas used for [ 8] to be 324747, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 324725) {
+        console.log(`Not Critical, but we expected gas used for [ 8] to be 324725, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -280,21 +291,17 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
-      // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
-      const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 340000 };
+      const { receipt } = await suspectOptimist.sendQueue(callOptions);
       suspectLastTxId = receipt.transactionHash;
 
+      const accountState = await suspectOptimist.getAccountState();
+
       expect(suspectOptimist.transitionsQueued).to.equal(0);
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
-
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-
-      if (receipt.gasUsed !== 327898) {
-        console.log(`Not Critical, but we expected gas used for [ 10] to be 327898, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 327876) {
+        console.log(`Not Critical, but we expected gas used for [ 10] to be 327876, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -308,7 +315,7 @@ contract('Optimistic Roll In', (accounts) => {
       const accountState = await suspectOptimist.getAccountState();
 
       expect(fraudster.fraudIndex).to.equal(fraudulentTransitionIndex);
-      expect(accountState).to.equal(toHex(fraudster.accountState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
     });
 
     it('[12] allows a user (suspect) to perform a valid optimistic state transition on top of an invalid state.', async () => {
@@ -316,15 +323,13 @@ contract('Optimistic Roll In', (accounts) => {
 
       const callArgs = [toHex(someArg)];
       const newState = somePureTransition(suspect, suspectOptimist.currentState, someArg);
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState);
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 40000 };
+      const { receipt } = await suspectOptimist.some_pure_transition.optimistic(callArgs, newState, callOptions);
       suspectLastTxId = receipt.transactionHash;
 
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
+      const accountState = await suspectOptimist.getAccountState();
 
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 38651) {
         console.log(`Not Critical, but we expected gas used for [ 12] to be 38651, but got ${receipt.gasUsed}`);
@@ -337,8 +342,7 @@ contract('Optimistic Roll In', (accounts) => {
       await fraudster.update(suspectLastTxId);
       const accountState = await suspectOptimist.getAccountState();
 
-      // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
-      expect(accountState).to.equal(toHex(fraudster.accountState));
+      expect(accountState.equals(fraudster.accountState)).to.be.true;
     });
 
     it('[14] allows a user (suspect) to perform valid optimistic state transitions in batch on top of an invalid state.', async () => {
@@ -353,27 +357,26 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
-      const { receipt, logs } = await suspectOptimist.sendQueue();
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 120000 };
+      const { receipt } = await suspectOptimist.sendQueue(callOptions);
       suspectLastTxId = receipt.transactionHash;
 
+      const accountState = await suspectOptimist.getAccountState();
+
       expect(suspectOptimist.transitionsQueued).to.equal(0);
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
-
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-
-      if (receipt.gasUsed !== 98117) {
-        console.log(`Not Critical, but we expected gas used for [ 14] to be 98117, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 98095) {
+        console.log(`Not Critical, but we expected gas used for [ 14] to be 98095, but got ${receipt.gasUsed}`);
       }
     });
 
     it("[15] allows a user (accuser) to lock a suspect's account for a time frame.", async () => {
       // An accuser, who previously detected the fraudulent transition will, will lock out the suspect (and bond themselves at the same time)
       const fraudster = accuserOptimist.getFraudster(suspect);
-      const { receipt, logs } = await fraudster.lock();
+
+      const callOptions = { gas: 140000 };
+      const { receipt } = await fraudster.lock(callOptions);
       accuserBondAmount = requiredBond;
 
       const block = await web3.eth.getBlock(receipt.blockNumber);
@@ -383,10 +386,6 @@ contract('Optimistic Roll In', (accounts) => {
       const accuserLocker = await accuserOptimist.getLocker();
       const accuserLockedTime = await accuserOptimist.getLockTimestamp();
 
-      expect(logs[0].event).to.equal('ORI_Locked');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1]).to.equal(accuser);
-
       expect(accuserBondBalance.toString()).to.equal(accuserBondAmount);
 
       expect(suspectLocker).to.equal(accuser);
@@ -394,8 +393,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(accuser);
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
 
-      if (receipt.gasUsed !== 128107) {
-        console.log(`Not Critical, but we expected gas used for [ 15] to be 128107, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 128150) {
+        console.log(`Not Critical, but we expected gas used for [ 15] to be 128150, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -405,15 +404,14 @@ contract('Optimistic Roll In', (accounts) => {
       await fraudster.update(suspectLastTxId);
       const accountState = await suspectOptimist.getAccountState();
 
-      // We expect this partial tree roots, when combined, to have the same root as the suspects combined trees on-chain
-      expect(accountState).to.equal(toHex(fraudster.accountState));
+      expect(accountState.equals(fraudster.accountState)).to.be.true;
     });
 
     it("[17] allows a user (accuser) to prove a suspect's fraud (from a partial tree).", async () => {
       const fraudster = accuserOptimist.getFraudster(suspect);
 
-      // Prove the fraud
-      const { receipt, logs } = await fraudster.proveFraud();
+      const callOptions = { gas: 360000 };
+      const { receipt } = await fraudster.proveFraud(callOptions);
 
       expect(accuserOptimist.getFraudster(suspect)).to.equal(null);
 
@@ -431,31 +429,29 @@ contract('Optimistic Roll In', (accounts) => {
         .add(web3.utils.toBN(accuserBondAmount))
         .toString();
 
-      expect(logs[0].event).to.equal('ORI_Fraud_Proven');
-      expect(logs[0].args[0]).to.equal(accuser);
-      expect(logs[0].args[1]).to.equal(suspect);
-      expect(logs[0].args[2].toString()).to.equal(fraudulentTransitionIndex.toString());
-      expect(logs[0].args[3].toString()).to.equal(suspectBondAmount);
       suspectBondAmount = '0';
 
       expect(suspectBalance.toString()).to.equal('0');
       expect(suspectLocker).to.equal(suspect);
-      expect(suspectLockedTime.toString()).to.equal('0');
-      expect(suspectRollbackSize.toString()).to.equal(fraudulentTransitionIndex.toString());
+      expect(suspectLockedTime).to.equal(0);
+      expect(suspectRollbackSize).to.equal(fraudulentTransitionIndex);
 
       expect(accuserBalance.toString()).to.equal(expectedAccuserBalance);
       expect(accuserLocker).to.equal(null);
-      expect(accuserLockedTime.toString()).to.equal('0');
+      expect(accuserLockedTime).to.equal(0);
 
-      if (receipt.gasUsed !== 299849) {
-        console.log(`Not Critical, but we expected gas used for [ 17] to be 299849, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 299502) {
+        console.log(`Not Critical, but we expected gas used for [ 17] to be 299502, but got ${receipt.gasUsed}`);
       }
     });
 
     it('[18] allows a user (accuser) to unbond their balance (including the reward).', async () => {
       const startingEth = BigInt(await web3.eth.getBalance(accuser));
-      const { receipt } = await accuserOptimist.unbond(accuser);
+
+      const callOptions = { gas: 40000 };
+      const { receipt } = await accuserOptimist.unbond(accuser, callOptions);
       accuserBondAmount = '0';
+
       const endingEth = BigInt(await web3.eth.getBalance(accuser));
 
       const accuserBalance = await accuserOptimist.getBalance();
@@ -463,45 +459,38 @@ contract('Optimistic Roll In', (accounts) => {
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
 
       // I guess negative here for public since bond/reward is cheaper than proof cost
-      const expectedBalance = (await web3.eth.net.getId()) === 5777 ? '1999578020000000000' : '-1078000000000';
+      const expectedBalance = (await web3.eth.net.getId()) === 5777 ? '1999957846000000000' : '-1078000000000';
 
       expect((endingEth - startingEth).toString()).to.equal(expectedBalance);
       expect(accuserBalance.toString()).to.equal('0');
       expect(suspectBalance.toString()).to.equal('0');
       expect(optimismBalance.toString()).to.equal('0');
 
-      if (receipt.gasUsed !== 21099) {
-        console.log(`Not Critical, but we expected gas used for [ 18] to be 21099, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 21077) {
+        console.log(`Not Critical, but we expected gas used for [ 18] to be 21077, but got ${receipt.gasUsed}`);
       }
     });
 
     it('[19] allows a user (suspect) to rollback their call data tree.', async () => {
-      const { receipt, logs } = await suspectOptimist.rollback();
+      const callOptions = { gas: 600000 };
+      const { receipt } = await suspectOptimist.rollback(callOptions);
+      suspectLastTxId = receipt.transactionHash;
       suspectBondAmount = requiredBond;
-
-      const accountState = await suspectOptimist.getAccountState();
 
       const suspectBalance = await suspectOptimist.getBalance();
       const suspectLocker = await suspectOptimist.getLocker();
       const suspectRollbackSize = await suspectOptimist.getRollbackSize();
-
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
-
-      expect(logs[0].event).to.equal('ORI_Rolled_Back');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(fraudulentTransitionIndex.toString());
-      expect(logs[0].args[2].toString()).to.equal(suspectOptimist.lastTime.toString());
+      const accountState = await suspectOptimist.getAccountState();
 
       expect(suspectBalance.toString()).to.equal(suspectBondAmount);
       expect(suspectLocker).to.equal(null);
-      expect(suspectRollbackSize.toString()).to.equal('0');
-
+      expect(suspectRollbackSize).to.equal(0);
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-
-      if (receipt.gasUsed !== 335480) {
-        console.log(`Not Critical, but we expected gas used for [ 19] to be 335480, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 335458) {
+        console.log(`Not Critical, but we expected gas used for [ 19] to be 335458, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -517,30 +506,34 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
-      // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
-      const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 360000 };
+      const { receipt } = await suspectOptimist.sendQueue(callOptions);
       suspectLastTxId = receipt.transactionHash;
 
+      const accountState = await suspectOptimist.getAccountState();
+
       expect(suspectOptimist.transitionsQueued).to.equal(0);
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
-
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-
-      if (receipt.gasUsed !== 329042) {
-        console.log(`Not Critical, but we expected gas used for [ 20] to be 329042, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 329020) {
+        console.log(`Not Critical, but we expected gas used for [ 20] to be 329020, but got ${receipt.gasUsed}`);
       }
     });
 
-    it('[21] allows a user (suspect) to perform a normal state transition (and exit optimism).', async () => {
+    it('[21] allows a user (accuser) to immediately verify valid batched optimistic state transitions (using local js).', async () => {
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
+
+      expect(valid).to.be.true;
+      expect(user).to.equal(suspect.toLowerCase());
+    });
+
+    it('[22] allows a user (suspect) to perform a normal state transition (and exit optimism).', async () => {
       const networkId = await web3.eth.net.getId();
 
       if (networkId === 5777) {
         // Need to increase time by at least 600 seconds for this to be allowed
         await advanceTime(suspectOptimist.lastTime + 700);
+        await advanceBlock();
       } else {
         // Need to wait at least 60 seconds for lock time to expire
         console.info('Waiting for 70 seconds...');
@@ -551,21 +544,18 @@ contract('Optimistic Roll In', (accounts) => {
       const someArg = generateElements(1, { seed: '88' })[0];
 
       const callArgs = [toHex(someArg)];
-      const { receipt, logs } = await suspectOptimist.some_pure_transition.normal(callArgs);
+      const callOptions = { gas: 320000 };
+      const { receipt } = await suspectOptimist.some_pure_transition.normal(callArgs, callOptions);
       const accountState = await suspectOptimist.getAccountState();
 
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
-
-      expect(logs[0].event).to.equal('ORI_New_State');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(toHex(suspectOptimist.currentState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 290906) {
         console.log(`Not Critical, but we expected gas used for [ 21] to be 290906, but got ${receipt.gasUsed}`);
       }
     });
 
-    it('[22] allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).', async () => {
+    it('[23] allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).', async () => {
       const calls = 50;
       const someArgs = generateElements(calls, { seed: '99' });
 
@@ -577,22 +567,25 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
-      // send the queue, but purposefully ignore internal checks, because suspect wants to commit fraud
-      const { receipt, logs } = await suspectOptimist.sendQueue({ checkStates: false });
-      const accountState = await suspectOptimist.getAccountState();
+      const callOptions = { gas: 200000 };
+      const { receipt } = await suspectOptimist.sendQueue(callOptions);
       suspectLastTxId = receipt.transactionHash;
 
+      const accountState = await suspectOptimist.getAccountState();
+
       expect(suspectOptimist.transitionsQueued).to.equal(0);
-
-      expect(logs[0].event).to.equal('ORI_New_Optimistic_States');
-      expect(logs[0].args[0]).to.equal(suspect);
-      expect(logs[0].args[1].toString()).to.equal(suspectOptimist.lastTime.toString());
-
-      expect(accountState).to.equal(toHex(suspectOptimist.accountState));
+      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 166910) {
         console.log(`Not Critical, but we expected gas used for [ 22] to be 166910, but got ${receipt.gasUsed}`);
       }
+    });
+
+    it('[24] allows a user (accuser) to immediately verify valid batched optimistic state transitions (using local js).', async () => {
+      const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
+
+      expect(valid).to.be.true;
+      expect(user).to.equal(suspect.toLowerCase());
     });
   });
 });
