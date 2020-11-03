@@ -8,7 +8,7 @@ module.exports = function(deployer, network) {
       const lockTime = network === 'development' ? '600' : '60';   // 10 minutes or 1 minute
       const requiredBond = network === 'development' ? '1000000000000000000' : '10000000000000';   // 1 or 0.0001
 
-      return deployer.deploy(OptimisticRollIn, logicContact.address, '0x7ed30689', lockTime, requiredBond);
+      return deployer.deploy(OptimisticRollIn, logicContact.address, lockTime, requiredBond);
     })
     .then(() => OptimisticRollIn.deployed());
 };
