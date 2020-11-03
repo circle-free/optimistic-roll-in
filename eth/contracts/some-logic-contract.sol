@@ -10,36 +10,24 @@ import "./optimistic-roll-in-compatible.sol";
 contract Some_Logic_Contract is Optimistic_Roll_In_Compatible {
   event Impure_Transition(bytes32 data);
 
-  function get_selector(bytes calldata call_data) internal pure returns (bytes4) {
-    return call_data[0] | (bytes4(call_data[1]) >> 8) | (bytes4(call_data[2]) >> 16) | (bytes4(call_data[3]) >> 24);
-  }
-
   function initialize_state(address user) external payable override returns (bytes32) {
     require(msg.value >= 500000000000000000, "INSUFFICIENT_DEPOSIT");
     return keccak256(abi.encodePacked(user));
   }
 
-  function optimistic_entry_point(bytes calldata call_data) external view override returns (bytes32 new_state) {
-    bytes4 selector = get_selector(call_data);
-    require(selector == 0xef6f6a42, "INVALID_OPTIMISTIC_CALL");
-
+  function optimistic_call(bytes calldata call_data) external view override returns (bytes32 new_state) {
     // Call (staticcall) local function
-    // TODO: jump or low level function call would be more efficient
     (bool success, bytes memory state_bytes) = address(this).staticcall(call_data);
-    require(success, "STATIC_CALL_FAILED");
+    require(success, "OPTIMISTIC_CALL_FAILED");
 
     // Decode returned new_state
     new_state = abi.decode(state_bytes, (bytes32));
   }
 
-  function pessimistic_entry_point(bytes calldata call_data) external payable override returns (bytes32 new_state) {
-    bytes4 selector = get_selector(call_data);
-    require(selector == 0x816ef0b6, "INVALID_PESSIMISTIC_CALL");
-
+  function pessimistic_call(bytes calldata call_data) external payable override returns (bytes32 new_state) {
     // Call (staticcall) local function
-    // TODO: jump or low level function call would be more efficient
     (bool success, bytes memory state_bytes) = address(this).call{ value: msg.value }(call_data);
-    require(success, "CALL_FAILED");
+    require(success, "PESSIMISTIC_CALL_FAILED");
 
     // Decode returned new_state
     new_state = abi.decode(state_bytes, (bytes32));

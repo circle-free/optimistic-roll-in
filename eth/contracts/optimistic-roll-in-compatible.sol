@@ -8,8 +8,8 @@ interface Optimistic_Roll_In_Compatible {
   function initialize_state(address user) external payable returns (bytes32 initial_state);
 
   // call_data will be function selector (bytes4), user (non-payable address), current state (bytes32), and abi encoded args
-  function optimistic_entry_point(bytes calldata call_data) external view returns (bytes32 new_state);
+  function optimistic_call(bytes calldata call_data) external view returns (bytes32 new_state);
 
   // call_data will be function selector (bytes4), user (payable address), current state (bytes32), and abi encoded args
-  function pessimistic_entry_point(bytes calldata call_data) external payable returns (bytes32 new_state);
+  function pessimistic_call(bytes calldata call_data) external payable returns (bytes32 new_state);
 }

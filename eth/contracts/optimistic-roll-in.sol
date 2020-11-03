@@ -10,7 +10,6 @@ import "./optimistic-roll-in-compatible.sol";
 // TODO: consider verifying being view, or some kind of forced "come up for air" mechanism
 // TODO: make required bond queryable
 // TODO: logic_address cannot be immutable if it will be upgradeable
-// TODO: initializer cannot be immutable if it will be upgradeable
 
 contract Optimistic_Roll_In {
   event ORI_New_State(address indexed user, bytes32 indexed new_state);
@@ -22,7 +21,6 @@ contract Optimistic_Roll_In {
   event ORI_Rolled_Back(address indexed user, uint256 indexed tree_size, uint256 indexed block_time);
 
   Optimistic_Roll_In_Compatible public immutable logic_contract;
-  bytes4 public immutable initializer;
   uint256 public immutable lock_time;
   uint256 public immutable required_bond;
 
@@ -34,12 +32,10 @@ contract Optimistic_Roll_In {
 
   constructor(
     address _logic_address,
-    bytes4 _initializer,
     uint256 _lock_time,
     uint256 _required_bond
   ) {
     logic_contract = Optimistic_Roll_In_Compatible(_logic_address);
-    initializer = _initializer;
     lock_time = _lock_time;
     required_bond = _required_bond;
   }
@@ -133,7 +129,7 @@ contract Optimistic_Roll_In {
     if (user != abi.decode(call_data[4:], (address))) return false;
 
     // Compute a new state
-    try logic_contract.optimistic_entry_point(call_data) returns (bytes32 state) {
+    try logic_contract.optimistic_call(call_data) returns (bytes32 state) {
       return state == new_state;
     } catch {
       return false;
@@ -161,7 +157,7 @@ contract Optimistic_Roll_In {
     );
 
     // Compute a new state (S_n+1 or S_1), reusing the state variable
-    state = logic_contract.pessimistic_entry_point{ value: msg.value }(call_data);
+    state = logic_contract.pessimistic_call{ value: msg.value }(call_data);
 
     // Set the account state to an empty call data tree, the new state (S_n+1 or S_1), and last time 0
     account_states[caller] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));
