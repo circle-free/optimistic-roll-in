@@ -4,6 +4,7 @@ pragma solidity >=0.6.0 <=0.7.3;
 pragma experimental ABIEncoderV2;
 
 import "merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-library.sol";
+import "./optimistic-roll-in-compatible.sol";
 
 // TODO: perhaps a owner-controlled sighash whitelist for optimistically performing, and therefore a non-performing exit method
 // TODO: consider verifying being view, or some kind of forced "come up for air" mechanism
@@ -20,7 +21,7 @@ contract Optimistic_Roll_In {
   event ORI_Fraud_Proven(address indexed accuser, address indexed suspect, uint256 indexed transition_index);
   event ORI_Rolled_Back(address indexed user, uint256 indexed tree_size, uint256 indexed block_time);
 
-  address public immutable logic_address;
+  Optimistic_Roll_In_Compatible public immutable logic_contract;
   bytes4 public immutable initializer;
   uint256 public immutable lock_time;
   uint256 public immutable required_bond;
@@ -37,7 +38,7 @@ contract Optimistic_Roll_In {
     uint256 _lock_time,
     uint256 _required_bond
   ) {
-    logic_address = _logic_address;
+    logic_contract = Optimistic_Roll_In_Compatible(_logic_address);
     initializer = _initializer;
     lock_time = _lock_time;
     required_bond = _required_bond;
@@ -105,15 +106,8 @@ contract Optimistic_Roll_In {
     address user = msg.sender;
     uint256 remainder = apply_bond(user);
 
-    // call the initializer, passing any remaining amount
-    (bool success, bytes memory return_bytes) = logic_address.call{ value: remainder }(
-      abi.encodeWithSelector(initializer, user)
-    );
-
-    require(success, "INITIALIZE_FAILED");
-
-    // Decode initial state (S_0) from returned bytes
-    bytes32 initial_state = abi.decode(return_bytes, (bytes32));
+    // call the initializer, passing any remaining amount and get initial state (S_0)
+    bytes32 initial_state = logic_contract.initialize_state{ value: remainder }(user);
 
     // Set account state to combination of empty call data tree, initial state (S_0), and last time of 0 (not in optimism)
     account_states[user] = keccak256(abi.encodePacked(bytes32(0), initial_state, bytes32(0)));
@@ -134,19 +128,16 @@ contract Optimistic_Roll_In {
     address user,
     bytes calldata call_data,
     bytes32 new_state
-  ) internal returns (bool) {
+  ) internal view returns (bool) {
     // Check that the user is the user extracted from calldata (20 bytes starting after the function signature)
     if (user != abi.decode(call_data[4:], (address))) return false;
 
     // Compute a new state
-    (bool success, bytes memory state_bytes) = logic_address.call(call_data);
-
-    if (!success) return false;
-
-    // Decode new state from returns bytes, reusing the state variable
-    bytes32 state = abi.decode(state_bytes, (bytes32));
-
-    return state == new_state;
+    try logic_contract.optimistic_entry_point(call_data) returns (bytes32 state) {
+      return state == new_state;
+    } catch {
+      return false;
+    }
   }
 
   // Calls logic contract and updates account state
@@ -169,12 +160,8 @@ contract Optimistic_Roll_In {
       "INVALID_ROOTS"
     );
 
-    // Compute a new state (S_n+1 or S_1)
-    (bool success, bytes memory state_bytes) = logic_address.call{ value: msg.value }(call_data);
-    require(success, "CALL_FAILED");
-
-    // Decode new state (S_n+1 or S_1) from returned bytes, reusing the state variable
-    state = abi.decode(state_bytes, (bytes32));
+    // Compute a new state (S_n+1 or S_1), reusing the state variable
+    state = logic_contract.pessimistic_entry_point{ value: msg.value }(call_data);
 
     // Set the account state to an empty call data tree, the new state (S_n+1 or S_1), and last time 0
     account_states[caller] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));

@@ -1,0 +1,679 @@
+{
+  "contractName": "Optimistic_Roll_In_Compatible",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "user",
+          "type": "address"
+        }
+      ],
+      "name": "initialize_state",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "initial_state",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes",
+          "name": "call_data",
+          "type": "bytes"
+        }
+      ],
+      "name": "optimistic_entry_point",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "new_state",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes",
+          "name": "call_data",
+          "type": "bytes"
+        }
+      ],
+      "name": "pessimistic_entry_point",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "new_state",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    }
+  ],
+  "metadata": "{\"compiler\":{\"version\":\"0.7.3+commit.9bfce1f6\"},\"language\":\"Solidity\",\"output\":{\"abi\":[{\"inputs\":[{\"internalType\":\"address\",\"name\":\"user\",\"type\":\"address\"}],\"name\":\"initialize_state\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"initial_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"call_data\",\"type\":\"bytes\"}],\"name\":\"optimistic_entry_point\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"new_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"call_data\",\"type\":\"bytes\"}],\"name\":\"pessimistic_entry_point\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"new_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"payable\",\"type\":\"function\"}],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol\":\"Optimistic_Roll_In_Compatible\"},\"evmVersion\":\"petersburg\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":999999},\"remappings\":[]},\"sources\":{\"/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol\":{\"keccak256\":\"0x8badbd9bd7ce0af2fa7c947b0de639fe3aae2f7793a1815d147254eaddd1fcaf\",\"license\":\"MIT\",\"urls\":[\"bzz-raw://2e0903edb056d9a562c92993e7985bf5ea698351f9234196ef062be30d139ab0\",\"dweb:/ipfs/QmaF5aw4CMvfUEeaSxyjBQWdioVx27YSYJ98r6hVTrCL1D\"]}},\"version\":1}",
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "immutableReferences": {},
+  "generatedSources": [],
+  "deployedGeneratedSources": [],
+  "sourceMap": "",
+  "deployedSourceMap": "",
+  "source": "// SPDX-License-Identifier: MIT\n\npragma solidity >=0.6.0 <=0.7.3;\npragma experimental ABIEncoderV2;\n\ninterface Optimistic_Roll_In_Compatible {\n  // User (address) is a mandatory first field\n  function initialize_state(address user) external payable returns (bytes32 initial_state);\n\n  // call_data will be function selector (bytes4), user (non-payable address), current state (bytes32), and abi encoded args\n  function optimistic_entry_point(bytes calldata call_data) external view returns (bytes32 new_state);\n\n  // call_data will be function selector (bytes4), user (payable address), current state (bytes32), and abi encoded args\n  function pessimistic_entry_point(bytes calldata call_data) external payable returns (bytes32 new_state);\n}\n",
+  "sourcePath": "/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol",
+  "ast": {
+    "absolutePath": "/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol",
+    "exportedSymbols": {
+      "Optimistic_Roll_In_Compatible": [
+        61
+      ]
+    },
+    "id": 62,
+    "license": "MIT",
+    "nodeType": "SourceUnit",
+    "nodes": [
+      {
+        "id": 38,
+        "literals": [
+          "solidity",
+          ">=",
+          "0.6",
+          ".0",
+          "<=",
+          "0.7",
+          ".3"
+        ],
+        "nodeType": "PragmaDirective",
+        "src": "33:32:1"
+      },
+      {
+        "id": 39,
+        "literals": [
+          "experimental",
+          "ABIEncoderV2"
+        ],
+        "nodeType": "PragmaDirective",
+        "src": "66:33:1"
+      },
+      {
+        "abstract": false,
+        "baseContracts": [],
+        "contractDependencies": [],
+        "contractKind": "interface",
+        "fullyImplemented": false,
+        "id": 61,
+        "linearizedBaseContracts": [
+          61
+        ],
+        "name": "Optimistic_Roll_In_Compatible",
+        "nodeType": "ContractDefinition",
+        "nodes": [
+          {
+            "functionSelector": "7ed30689",
+            "id": 46,
+            "implemented": false,
+            "kind": "function",
+            "modifiers": [],
+            "name": "initialize_state",
+            "nodeType": "FunctionDefinition",
+            "parameters": {
+              "id": 42,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 41,
+                  "mutability": "mutable",
+                  "name": "user",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 46,
+                  "src": "218:12:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_address",
+                    "typeString": "address"
+                  },
+                  "typeName": {
+                    "id": 40,
+                    "name": "address",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "218:7:1",
+                    "stateMutability": "nonpayable",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_address",
+                      "typeString": "address"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "217:14:1"
+            },
+            "returnParameters": {
+              "id": 45,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 44,
+                  "mutability": "mutable",
+                  "name": "initial_state",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 46,
+                  "src": "258:21:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes32",
+                    "typeString": "bytes32"
+                  },
+                  "typeName": {
+                    "id": 43,
+                    "name": "bytes32",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "258:7:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes32",
+                      "typeString": "bytes32"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "257:23:1"
+            },
+            "scope": 61,
+            "src": "192:89:1",
+            "stateMutability": "payable",
+            "virtual": false,
+            "visibility": "external"
+          },
+          {
+            "functionSelector": "a27f4a3e",
+            "id": 53,
+            "implemented": false,
+            "kind": "function",
+            "modifiers": [],
+            "name": "optimistic_entry_point",
+            "nodeType": "FunctionDefinition",
+            "parameters": {
+              "id": 49,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 48,
+                  "mutability": "mutable",
+                  "name": "call_data",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 53,
+                  "src": "442:24:1",
+                  "stateVariable": false,
+                  "storageLocation": "calldata",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes_calldata_ptr",
+                    "typeString": "bytes"
+                  },
+                  "typeName": {
+                    "id": 47,
+                    "name": "bytes",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "442:5:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes_storage_ptr",
+                      "typeString": "bytes"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "441:26:1"
+            },
+            "returnParameters": {
+              "id": 52,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 51,
+                  "mutability": "mutable",
+                  "name": "new_state",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 53,
+                  "src": "491:17:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes32",
+                    "typeString": "bytes32"
+                  },
+                  "typeName": {
+                    "id": 50,
+                    "name": "bytes32",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "491:7:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes32",
+                      "typeString": "bytes32"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "490:19:1"
+            },
+            "scope": 61,
+            "src": "410:100:1",
+            "stateMutability": "view",
+            "virtual": false,
+            "visibility": "external"
+          },
+          {
+            "functionSelector": "3f65f171",
+            "id": 60,
+            "implemented": false,
+            "kind": "function",
+            "modifiers": [],
+            "name": "pessimistic_entry_point",
+            "nodeType": "FunctionDefinition",
+            "parameters": {
+              "id": 56,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 55,
+                  "mutability": "mutable",
+                  "name": "call_data",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 60,
+                  "src": "668:24:1",
+                  "stateVariable": false,
+                  "storageLocation": "calldata",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes_calldata_ptr",
+                    "typeString": "bytes"
+                  },
+                  "typeName": {
+                    "id": 54,
+                    "name": "bytes",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "668:5:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes_storage_ptr",
+                      "typeString": "bytes"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "667:26:1"
+            },
+            "returnParameters": {
+              "id": 59,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 58,
+                  "mutability": "mutable",
+                  "name": "new_state",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 60,
+                  "src": "720:17:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes32",
+                    "typeString": "bytes32"
+                  },
+                  "typeName": {
+                    "id": 57,
+                    "name": "bytes32",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "720:7:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes32",
+                      "typeString": "bytes32"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "719:19:1"
+            },
+            "scope": 61,
+            "src": "635:104:1",
+            "stateMutability": "payable",
+            "virtual": false,
+            "visibility": "external"
+          }
+        ],
+        "scope": 62,
+        "src": "101:640:1"
+      }
+    ],
+    "src": "33:709:1"
+  },
+  "legacyAST": {
+    "absolutePath": "/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol",
+    "exportedSymbols": {
+      "Optimistic_Roll_In_Compatible": [
+        61
+      ]
+    },
+    "id": 62,
+    "license": "MIT",
+    "nodeType": "SourceUnit",
+    "nodes": [
+      {
+        "id": 38,
+        "literals": [
+          "solidity",
+          ">=",
+          "0.6",
+          ".0",
+          "<=",
+          "0.7",
+          ".3"
+        ],
+        "nodeType": "PragmaDirective",
+        "src": "33:32:1"
+      },
+      {
+        "id": 39,
+        "literals": [
+          "experimental",
+          "ABIEncoderV2"
+        ],
+        "nodeType": "PragmaDirective",
+        "src": "66:33:1"
+      },
+      {
+        "abstract": false,
+        "baseContracts": [],
+        "contractDependencies": [],
+        "contractKind": "interface",
+        "fullyImplemented": false,
+        "id": 61,
+        "linearizedBaseContracts": [
+          61
+        ],
+        "name": "Optimistic_Roll_In_Compatible",
+        "nodeType": "ContractDefinition",
+        "nodes": [
+          {
+            "functionSelector": "7ed30689",
+            "id": 46,
+            "implemented": false,
+            "kind": "function",
+            "modifiers": [],
+            "name": "initialize_state",
+            "nodeType": "FunctionDefinition",
+            "parameters": {
+              "id": 42,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 41,
+                  "mutability": "mutable",
+                  "name": "user",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 46,
+                  "src": "218:12:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_address",
+                    "typeString": "address"
+                  },
+                  "typeName": {
+                    "id": 40,
+                    "name": "address",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "218:7:1",
+                    "stateMutability": "nonpayable",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_address",
+                      "typeString": "address"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "217:14:1"
+            },
+            "returnParameters": {
+              "id": 45,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 44,
+                  "mutability": "mutable",
+                  "name": "initial_state",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 46,
+                  "src": "258:21:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes32",
+                    "typeString": "bytes32"
+                  },
+                  "typeName": {
+                    "id": 43,
+                    "name": "bytes32",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "258:7:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes32",
+                      "typeString": "bytes32"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "257:23:1"
+            },
+            "scope": 61,
+            "src": "192:89:1",
+            "stateMutability": "payable",
+            "virtual": false,
+            "visibility": "external"
+          },
+          {
+            "functionSelector": "a27f4a3e",
+            "id": 53,
+            "implemented": false,
+            "kind": "function",
+            "modifiers": [],
+            "name": "optimistic_entry_point",
+            "nodeType": "FunctionDefinition",
+            "parameters": {
+              "id": 49,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 48,
+                  "mutability": "mutable",
+                  "name": "call_data",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 53,
+                  "src": "442:24:1",
+                  "stateVariable": false,
+                  "storageLocation": "calldata",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes_calldata_ptr",
+                    "typeString": "bytes"
+                  },
+                  "typeName": {
+                    "id": 47,
+                    "name": "bytes",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "442:5:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes_storage_ptr",
+                      "typeString": "bytes"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "441:26:1"
+            },
+            "returnParameters": {
+              "id": 52,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 51,
+                  "mutability": "mutable",
+                  "name": "new_state",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 53,
+                  "src": "491:17:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes32",
+                    "typeString": "bytes32"
+                  },
+                  "typeName": {
+                    "id": 50,
+                    "name": "bytes32",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "491:7:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes32",
+                      "typeString": "bytes32"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "490:19:1"
+            },
+            "scope": 61,
+            "src": "410:100:1",
+            "stateMutability": "view",
+            "virtual": false,
+            "visibility": "external"
+          },
+          {
+            "functionSelector": "3f65f171",
+            "id": 60,
+            "implemented": false,
+            "kind": "function",
+            "modifiers": [],
+            "name": "pessimistic_entry_point",
+            "nodeType": "FunctionDefinition",
+            "parameters": {
+              "id": 56,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 55,
+                  "mutability": "mutable",
+                  "name": "call_data",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 60,
+                  "src": "668:24:1",
+                  "stateVariable": false,
+                  "storageLocation": "calldata",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes_calldata_ptr",
+                    "typeString": "bytes"
+                  },
+                  "typeName": {
+                    "id": 54,
+                    "name": "bytes",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "668:5:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes_storage_ptr",
+                      "typeString": "bytes"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "667:26:1"
+            },
+            "returnParameters": {
+              "id": 59,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 58,
+                  "mutability": "mutable",
+                  "name": "new_state",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 60,
+                  "src": "720:17:1",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_bytes32",
+                    "typeString": "bytes32"
+                  },
+                  "typeName": {
+                    "id": 57,
+                    "name": "bytes32",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "720:7:1",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_bytes32",
+                      "typeString": "bytes32"
+                    }
+                  },
+                  "visibility": "internal"
+                }
+              ],
+              "src": "719:19:1"
+            },
+            "scope": 61,
+            "src": "635:104:1",
+            "stateMutability": "payable",
+            "virtual": false,
+            "visibility": "external"
+          }
+        ],
+        "scope": 62,
+        "src": "101:640:1"
+      }
+    ],
+    "src": "33:709:1"
+  },
+  "compiler": {
+    "name": "solc",
+    "version": "0.7.3+commit.9bfce1f6.Emscripten.clang"
+  },
+  "networks": {},
+  "schemaVersion": "3.3.1",
+  "updatedAt": "2020-11-03T06:50:55.313Z",
+  "devdoc": {
+    "kind": "dev",
+    "methods": {},
+    "version": 1
+  },
+  "userdoc": {
+    "kind": "user",
+    "methods": {},
+    "version": 1
+  }
+}
