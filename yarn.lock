@@ -3088,10 +3088,10 @@ merkle-patricia-tree@^2.1.2, merkle-patricia-tree@^2.3.2:
     rlp "^2.0.0"
     semaphore ">=1.0.1"
 
-merkle-trees@^0.1.18:
-  version "0.1.18"
-  resolved "https://registry.yarnpkg.com/merkle-trees/-/merkle-trees-0.1.18.tgz#620b3c7a262256bf19bc8ed84452395607766765"
-  integrity sha512-F+iiRKr4gv1m69voTbNlOq8Hbr90YLMKImZbf7Wq/jAJ/8Xp6XTS8ceWeQ5/K73Ahv33R+f0ZRLruwW/zpotOA==
+merkle-trees@^0.1.19:
+  version "0.1.19"
+  resolved "https://registry.yarnpkg.com/merkle-trees/-/merkle-trees-0.1.19.tgz#bbed5d75edb023e236dd6603c1597e5f8a645ff8"
+  integrity sha512-uTURC5lcdbPReVCj+nQe9+8HwNYgMjQjthdLKJGDFTRYup4eUjDFG/MAP5fGtLUM7mFnQ6e1G45kIEnPhXpW2Q==
   dependencies:
     bitwise-buffer "^1.0.2"
     sha3 "^2.1.3"
