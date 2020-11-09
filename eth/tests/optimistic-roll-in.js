@@ -259,8 +259,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 324805) {
-        console.log(`Not Critical, but we expected gas used for [ 8] to be 324805, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 324781) {
+        console.log(`Not Critical, but we expected gas used for [ 8] to be 324781, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -331,8 +331,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 38639) {
-        console.log(`Not Critical, but we expected gas used for [ 12] to be 38639, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 38651) {
+        console.log(`Not Critical, but we expected gas used for [ 12] to be 38651, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -515,8 +515,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 329076) {
-        console.log(`Not Critical, but we expected gas used for [ 20] to be 329076, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 329148) {
+        console.log(`Not Critical, but we expected gas used for [ 20] to be 329148, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -576,8 +576,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 166934) {
-        console.log(`Not Critical, but we expected gas used for [ 23] to be 166934, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 166886) {
+        console.log(`Not Critical, but we expected gas used for [ 23] to be 166886, but got ${receipt.gasUsed}`);
       }
     });
 
