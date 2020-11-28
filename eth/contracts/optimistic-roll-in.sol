@@ -3,7 +3,7 @@
 pragma solidity >=0.6.0 <=0.7.3;
 pragma experimental ABIEncoderV2;
 
-import "merkle-trees/eth/contracts/libraries/calldata/bytes/standard/merkle-library.sol";
+import "merkle-trees/eth/contracts/internal-merkle-library.sol";
 import "./optimistic-roll-in-compatible.sol";
 
 // TODO: perhaps a owner-controlled sighash whitelist for optimistically performing, and therefore a non-performing exit method
@@ -199,7 +199,7 @@ contract Optimistic_Roll_In {
     );
 
     // Get root of new merkle tree with 1 call data element (CD_0), reusing state as call_data_root
-    state = Merkle_Library_CBS.try_append_one(call_data_root, call_data, proof);
+    state = Internal_Merkle_Library.try_append_one_c(call_data_root, call_data, proof);
 
     // Combine call data root, new state (S_1), and current time into account state
     account_states[caller] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
@@ -246,7 +246,7 @@ contract Optimistic_Roll_In {
     );
 
     // Get new merkle root of call data tree, appending several call data (CD_n - CD_n+m), reusing state as call_data_root
-    state = Merkle_Library_CBS.try_append_many(call_data_root, call_data, proof);
+    state = Internal_Merkle_Library.try_append_many_c(call_data_root, call_data, proof);
 
     // Combine call data root, new state (S_n+m), and current time into account state
     account_states[user] = keccak256(abi.encodePacked(state, new_state, bytes32(block.timestamp)));
@@ -351,10 +351,10 @@ contract Optimistic_Roll_In {
     );
 
     // Check that the call data exist
-    require(Merkle_Library_CBS.elements_exist(call_data_root, call_data, proof), "INVALID_CALLDATA");
+    require(Internal_Merkle_Library.elements_exist(call_data_root, call_data, proof), "INVALID_CALLDATA");
 
     // get the indices of the call data in the call data tre
-    uint256[] memory call_data_indices = Merkle_Library_CBS.get_indices(call_data, proof);
+    uint256[] memory call_data_indices = Internal_Merkle_Library.get_indices(call_data, proof);
 
     // The transition index is the index of the starting call data of the fraud proof
     uint256 transition_index = call_data_indices[0];
@@ -419,7 +419,7 @@ contract Optimistic_Roll_In {
     );
 
     // Check that the provided size of the current call data tree is correct
-    require(Merkle_Library_CBS.verify_size(call_data_root, current_size, current_size_proof), "INVALID_SIZE");
+    require(Internal_Merkle_Library.verify_size(call_data_root, current_size, current_size_proof), "INVALID_SIZE");
 
     // Allow incremental roll back by checking that the rolled back call data tree is smaller than the current tree
     uint256 rolled_back_size = uint256(roll_back_proof[0]);
@@ -430,7 +430,7 @@ contract Optimistic_Roll_In {
 
     // Check that the current call data root is derived by appending the rolled back call data to the rolled back call data root
     require(
-      Merkle_Library_CBS.try_append_many(rolled_back_call_data_root, rolled_back_call_data, roll_back_proof) ==
+      Internal_Merkle_Library.try_append_many_c(rolled_back_call_data_root, rolled_back_call_data, roll_back_proof) ==
         call_data_root,
       "INVALID_ROLLBACK"
     );
