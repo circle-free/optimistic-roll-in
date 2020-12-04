@@ -201,8 +201,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 34339) {
-        console.log(`Not Critical, but we expected gas used for [ 4] to be 34339, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 34351) {
+        console.log(`Not Critical, but we expected gas used for [ 4] to be 34351, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -259,8 +259,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 324090) {
-        console.log(`Not Critical, but we expected gas used for [ 8] to be 324090, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 323982) {
+        console.log(`Not Critical, but we expected gas used for [ 8] to be 323982, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -300,8 +300,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 327169) {
-        console.log(`Not Critical, but we expected gas used for [ 10] to be 327169, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 327193) {
+        console.log(`Not Critical, but we expected gas used for [ 10] to be 327193, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -366,8 +366,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 98004) {
-        console.log(`Not Critical, but we expected gas used for [ 14] to be 98004, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 98016) {
+        console.log(`Not Critical, but we expected gas used for [ 14] to be 98016, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -440,8 +440,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(null);
       expect(accuserLockedTime).to.equal(0);
 
-      if (receipt.gasUsed !== 302397) {
-        console.log(`Not Critical, but we expected gas used for [ 17] to be 302397, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 302409) {
+        console.log(`Not Critical, but we expected gas used for [ 17] to be 302409, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -489,8 +489,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 334711) {
-        console.log(`Not Critical, but we expected gas used for [ 19] to be 334711, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 334723) {
+        console.log(`Not Critical, but we expected gas used for [ 19] to be 334723, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -515,8 +515,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 328385) {
-        console.log(`Not Critical, but we expected gas used for [ 20] to be 328385, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 328373) {
+        console.log(`Not Critical, but we expected gas used for [ 20] to be 328373, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -576,8 +576,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 166937) {
-        console.log(`Not Critical, but we expected gas used for [ 23] to be 166937, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 166913) {
+        console.log(`Not Critical, but we expected gas used for [ 23] to be 166913, but got ${receipt.gasUsed}`);
       }
     });
 

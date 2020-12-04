@@ -351,7 +351,7 @@ contract Optimistic_Roll_In {
     );
 
     // Check that the call data exist
-    require(Internal_Merkle_Library.elements_exist(call_data_root, call_data, proof), "INVALID_CALLDATA");
+    require(Internal_Merkle_Library.elements_exist_c(call_data_root, call_data, proof), "INVALID_CALLDATA");
 
     // get the indices of the call data in the call data tre
     uint256[] memory call_data_indices = Internal_Merkle_Library.get_indices(call_data, proof);

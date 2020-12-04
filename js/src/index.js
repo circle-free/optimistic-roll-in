@@ -504,6 +504,8 @@ class OptimisticRollIn {
 
   // PRIVATE: queues a transition to be broadcasted in batch later
   _queueCall(functionName, args = [], newState) {
+    // TODO: assert that args.currentState is newState
+
     this._queue.newStates.push(newState);
     this._queue.functionNames.push(functionName);
     this._queue.args.push(args);
