@@ -49810,12 +49810,12 @@
         }
       },
       "links": {},
-      "address": "0x1EDd2E676ff881707A9A0d826392F8Db4f150C74",
-      "transactionHash": "0xe59d7744f2546bb6f7dac8f6e4e83a04b69eaf40a6368ec629580ea444db5968"
+      "address": "0x278e83c80A86AB47884970582e0F96e8874d501e",
+      "transactionHash": "0xa297512aa7eb56f4bc23ef71d91bcab72afae34a3212698438166872b04ca991"
     }
   },
-  "schemaVersion": "3.3.1",
-  "updatedAt": "2020-12-04T06:07:01.264Z",
+  "schemaVersion": "3.3.2",
+  "updatedAt": "2020-12-07T22:33:11.952Z",
   "networkType": "ethereum",
   "devdoc": {
     "kind": "dev",

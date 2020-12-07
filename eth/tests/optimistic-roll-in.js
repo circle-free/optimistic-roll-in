@@ -139,7 +139,10 @@ contract('Optimistic Roll In', (accounts) => {
       accuserOptimist = new OptimisticRollIn(accuser, contracts, oriOptions);
     });
 
-    it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
+    it.only('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
+      const isBonded = await suspectOptimist.isBonded();
+      expect(isBonded).to.be.false;
+
       const { receipt } = await suspectOptimist.bond();
       suspectBondAmount = requiredBond;
 

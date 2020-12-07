@@ -676,6 +676,11 @@ class OptimisticRollIn {
     return BigInt(balance.toString());
   }
 
+  // PUBLIC: Returns true if the account is sufficiently bonded (on chain)
+  async isBonded(user = this._state.user) {
+    return (await this.getBalance(user) >= this._requiredBond);
+  }
+
   // PUBLIC: Returns an ORI instance (if exists) for a fraudulent user's address
   getFraudster(user) {
     return this._frauds[user.toLowerCase()];
