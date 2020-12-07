@@ -669,6 +669,11 @@ class OptimisticRollIn {
     return accountState === ZERO_BYTES_32 ? null : toBuffer(accountState);
   }
 
+  // PUBLIC: Returns true if the account is initialized (on chain)
+  async isInitialized(user = this._state.user) {
+    return !!(await this.getAccountState(user));
+  }
+
   // PUBLIC: Returns the account user's balance (on chain)
   async getBalance(user = this._state.user) {
     const balance = await this._oriContract.methods.balances(user).call();
@@ -678,7 +683,7 @@ class OptimisticRollIn {
 
   // PUBLIC: Returns true if the account is sufficiently bonded (on chain)
   async isBonded(user = this._state.user) {
-    return (await this.getBalance(user) >= this._requiredBond);
+    return (await this.getBalance(user)) >= this._requiredBond;
   }
 
   // PUBLIC: Returns an ORI instance (if exists) for a fraudulent user's address

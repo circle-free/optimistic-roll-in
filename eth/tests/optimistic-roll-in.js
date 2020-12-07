@@ -140,8 +140,7 @@ contract('Optimistic Roll In', (accounts) => {
     });
 
     it.only('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
-      const isBonded = await suspectOptimist.isBonded();
-      expect(isBonded).to.be.false;
+      expect(await suspectOptimist.isBonded()).to.be.false;
 
       const { receipt } = await suspectOptimist.bond();
       suspectBondAmount = requiredBond;
@@ -151,13 +150,16 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(bondBalance.toString()).to.equal(suspectBondAmount);
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
+      expect(await suspectOptimist.isBonded()).to.be.true;
 
       if (receipt.gasUsed !== 42844) {
         console.log(`Not Critical, but we expected gas used for [ 1] to be 42844, but got ${receipt.gasUsed}`);
       }
     });
 
-    it('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
+    it.only('[ 2] can initialize a user (suspect) and deposit some ETH in the logic contract.', async () => {
+      expect(await suspectOptimist.isInitialized()).to.be.false;
+
       suspectDepositAmount = '500000000000000000';
       const options = { deposit: suspectDepositAmount, gas: 60000 };
       const { receipt } = await suspectOptimist.initialize(options);
@@ -170,6 +172,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(bondBalance.toString()).to.equal(suspectBondAmount);
       expect(logicBalance.toString()).to.equal(suspectDepositAmount);
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
+
+      expect(await suspectOptimist.isInitialized()).to.be.true;
 
       if (receipt.gasUsed !== 53942) {
         console.log(`Not Critical, but we expected gas used for [ 2] to be 53942, but got ${receipt.gasUsed}`);
