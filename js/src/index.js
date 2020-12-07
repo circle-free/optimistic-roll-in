@@ -304,8 +304,7 @@ class OptimisticRollIn {
     return this._performPessimisticallyWhileExitingOptimism(functionName, args, callOptions);
   }
 
-  // PRIVATE: Optimistically perform batch transitions while already in optimistic state, and update internal state (only for self)
-  async _performBatchOptimistically(functionNames = [], args = [], newStates = [], options = {}) {
+  async _prepareBatchCalldata(functionNames = [], args = [], newStates = [], options = {}) {
     const { from = this._sourceAddress, gas } = options;
 
     assert(compareHex(from, this._state.user), 'Can only perform on own account.');
@@ -330,6 +329,18 @@ class OptimisticRollIn {
     if (gas) {
       callOptions.gas = gas;
     }
+
+    return { callDataArray, newState, proof, callOptions, newMerkleTree };
+  }
+
+  // PRIVATE: Optimistically perform batch transitions while already in optimistic state, and update internal state (only for self)
+  async _performBatchOptimistically(functionNames = [], args = [], newStates = [], options = {}) {
+    const { callDataArray, newState, proof, callOptions, newMerkleTree } = await this._prepareBatchCalldata(
+      functionNames,
+      args,
+      newStates,
+      options
+    );
 
     const receipt = await this._oriContract.methods
       .perform_many_optimistically(
@@ -351,30 +362,12 @@ class OptimisticRollIn {
 
   // PRIVATE: Optimistically perform batch transitions to enter optimistic state, and update internal state (only for self)
   async _performBatchOptimisticallyWhileEnteringOptimism(functionNames = [], args = [], newStates = [], options = {}) {
-    const { from = this._sourceAddress, gas } = options;
-
-    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
-    assert(functionNames.length > 0, 'No function calls specified.');
-    assert(functionNames.length === args.length, 'Function and args count mismatch.');
-
-    // Compute the new state from the current state, locally
-    const callDataArray = [];
-    let newState = this._state.currentState;
-
-    for (let i = 0; i < functionNames.length; i++) {
-      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
-      callDataArray.push(toBuffer(callDataHex));
-      newState = newStates[i];
-    }
-
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, PROOF_OPTIONS);
-
-    const callOptions = { from };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
+    const { callDataArray, newState, proof, callOptions, newMerkleTree } = await this._prepareBatchCalldata(
+      functionNames,
+      args,
+      newStates,
+      options
+    );
 
     const receipt = await this._oriContract.methods
       .perform_many_optimistically_and_enter(toHex(callDataArray), toHex(newState), toHex(proof.compactProof))

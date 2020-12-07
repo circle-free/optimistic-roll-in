@@ -68,6 +68,7 @@ module.exports = {
       host: "127.0.0.1",     // Localhost (default: none)
       port: 7545,            // Standard Ethereum port (default: none)
       network_id: 5777,    // Any network (default: none)
+      gasPrice: 2000000000,
     },
     matic: {
       provider: maticProvider,
@@ -75,7 +76,7 @@ module.exports = {
       confirmations: 1,
       timeoutBlocks: 200,
       skipDryRun: true,
-      gasPrice: 1000000000
+      gasPrice: 1000000000,
     },
     ropsten: {
       provider: ropstenProvider,
@@ -146,7 +147,7 @@ module.exports = {
           enabled: true,
           runs: 999999,
         },
-        evmVersion: 'petersburg',
+        evmVersion: 'istanbul',
       },
     },
   },
