@@ -39,6 +39,31 @@ const TOPICS = {
 // TODO: smart local gas estimates as default
 // TODO: check if account locked for all performs (maybe not, might be slow)
 
+const binarySearchGasCost = async (
+  callDataArray,
+  newStatesArray,
+  gasEstimator,
+  searchValue,
+  left = 0,
+  right = callDataArray.length
+) => {
+  const cache = {};
+
+  while (left < right) {
+    const mid = (left + right) >> 1;
+    const valueAtMid =
+      cache[mid] ?? (cache[mid] = await gasEstimator(callDataArray.slice(0, mid + 1), newStatesArray[mid]));
+
+    if (searchValue < valueAtMid) {
+      right = mid;
+    } else {
+      left = mid + 1;
+    }
+  }
+
+  return left - 1;
+};
+
 class OptimisticRollIn {
   constructor(accountAddress, contracts = {}, options = {}) {
     const { oriAddress, oriABI, logicAddress, logicABI } = contracts;
@@ -123,11 +148,7 @@ class OptimisticRollIn {
       fraudIndex: null,
     };
 
-    this._queue = {
-      newStates: [],
-      functionNames: [],
-      args: [],
-    };
+    this._queue = [];
 
     this._frauds = {};
   }
@@ -212,8 +233,8 @@ class OptimisticRollIn {
 
   // GETTER: Returns the current state of the account's data
   get queuedState() {
-    const queueLength = this._queue.newStates.length;
-    return queueLength ? this._queue.newStates[queueLength - 1] : this._state.currentState;
+    const queueLength = this._queue.length;
+    return queueLength ? this._queue[queueLength - 1].newState : this._state.currentState;
   }
 
   // GETTER: Returns the number of optimistic transitions of the account
@@ -224,7 +245,7 @@ class OptimisticRollIn {
 
   // GETTER: Returns if in optimistic state
   get transitionsQueued() {
-    return this._queue.newStates.length;
+    return this._queue.length;
   }
 
   // PRIVATE: Returns call data hex needed to call a function, given the current state and args
@@ -304,43 +325,66 @@ class OptimisticRollIn {
     return this._performPessimisticallyWhileExitingOptimism(functionName, args, callOptions);
   }
 
-  async _prepareBatchCalldata(functionNames = [], args = [], newStates = [], options = {}) {
-    const { from = this._sourceAddress, gas } = options;
+  // PRIVATE: prepare calldata necessary for batch optimistic calls, within gas constraints (only for self)
+  async _prepareBatchCalldata(queue = [], options = {}) {
+    const { from = this._sourceAddress, gas = 1000000, estimator } = options;
 
     assert(compareHex(from, this._state.user), 'Can only perform on own account.');
-    assert(functionNames.length > 0, 'No function calls specified.');
-    assert(functionNames.length === args.length, 'Function and args count mismatch.');
+    assert(queue.length > 1, 'Queue must contain at least 2.');
 
-    // Compute the new state from the current state, locally
     const callDataArray = [];
-    let newState = this._state.currentState;
+    const newStatesArray = [];
 
-    for (let i = 0; i < functionNames.length; i++) {
-      const callDataHex = await this._getCalldata(this._state.user, newState, functionNames[i], args[i]);
-      callDataArray.push(toBuffer(callDataHex));
-      newState = newStates[i];
+    for (let i = 0; i < queue.length; i++) {
+      const { functionName, args, newState } = queue[i];
+      const interimState = i === 0 ? this._state.currentState : queue[i - 1].newState;
+      callDataArray.push(toBuffer(this._getCalldata(this._state.user, interimState, functionName, args)));
+      newStatesArray.push(newState);
     }
+
+    const gasEstimator = (cdArray, ns) =>
+      estimator(cdArray, ns, this._state.callDataTree.appendMulti(cdArray, PROOF_OPTIONS).proof);
+    const index = await binarySearchGasCost(callDataArray, newStatesArray, gasEstimator, gas);
+
+    const possibleCallDataArray = callDataArray.slice(0, index + 1);
+    const newState = newStatesArray[index];
 
     // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(callDataArray, PROOF_OPTIONS);
+    const { proof, newMerkleTree } = this._state.callDataTree.appendMulti(possibleCallDataArray, PROOF_OPTIONS);
+    const callOptions = gas ? { from, gas } : { from };
+    const remainingQueue = queue.slice(index + 1, queue.length);
 
-    const callOptions = { from };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
-
-    return { callDataArray, newState, proof, callOptions, newMerkleTree };
+    return {
+      callDataArray: possibleCallDataArray,
+      newState,
+      proof,
+      callOptions,
+      newMerkleTree,
+      remainingQueue,
+    };
   }
 
   // PRIVATE: Optimistically perform batch transitions while already in optimistic state, and update internal state (only for self)
-  async _performBatchOptimistically(functionNames = [], args = [], newStates = [], options = {}) {
-    const { callDataArray, newState, proof, callOptions, newMerkleTree } = await this._prepareBatchCalldata(
-      functionNames,
-      args,
-      newStates,
-      options
-    );
+  async _performBatchOptimistically(options = {}) {
+    const estimator = (callDataArray, newState, proof) =>
+      this._oriContract.methods
+        .perform_many_optimistically(
+          toHex(callDataArray),
+          toHex(newState),
+          toHex(proof.root),
+          toHex(proof.compactProof),
+          this._state.lastTime
+        )
+        .estimateGas({ gas: 5000000 });
+
+    const {
+      callDataArray,
+      newState,
+      proof,
+      callOptions,
+      newMerkleTree,
+      remainingQueue,
+    } = await this._prepareBatchCalldata(this._queue, Object.assign({ estimator }, options));
 
     const receipt = await this._oriContract.methods
       .perform_many_optimistically(
@@ -357,17 +401,27 @@ class OptimisticRollIn {
 
     this._updateStateOptimistically(newMerkleTree, newState, Number(returnValues.block_time));
 
+    this._queue.length = 0;
+    this._queue = remainingQueue;
+
     return { newState, receipt };
   }
 
   // PRIVATE: Optimistically perform batch transitions to enter optimistic state, and update internal state (only for self)
-  async _performBatchOptimisticallyWhileEnteringOptimism(functionNames = [], args = [], newStates = [], options = {}) {
-    const { callDataArray, newState, proof, callOptions, newMerkleTree } = await this._prepareBatchCalldata(
-      functionNames,
-      args,
-      newStates,
-      options
-    );
+  async _performBatchOptimisticallyWhileEnteringOptimism(options = {}) {
+    const estimator = (callDataArray, newState, proof) =>
+      this._oriContract.methods
+        .perform_many_optimistically_and_enter(toHex(callDataArray), toHex(newState), toHex(proof.compactProof))
+        .estimateGas({ gas: 5000000 });
+
+    const {
+      callDataArray,
+      newState,
+      proof,
+      callOptions,
+      newMerkleTree,
+      remainingQueue,
+    } = await this._prepareBatchCalldata(this._queue, Object.assign({ estimator }, options));
 
     const receipt = await this._oriContract.methods
       .perform_many_optimistically_and_enter(toHex(callDataArray), toHex(newState), toHex(proof.compactProof))
@@ -377,6 +431,9 @@ class OptimisticRollIn {
     assert(compareHex(returnValues.user, this._state.user), 'Unexpected user.');
 
     this._updateStateOptimistically(newMerkleTree, newState, Number(returnValues.block_time));
+
+    this._queue.length = 0;
+    this._queue = remainingQueue;
 
     return { newState, receipt };
   }
@@ -498,10 +555,7 @@ class OptimisticRollIn {
   // PRIVATE: queues a transition to be broadcasted in batch later
   _queueCall(functionName, args = [], newState) {
     // TODO: assert that args.currentState is newState
-
-    this._queue.newStates.push(newState);
-    this._queue.functionNames.push(functionName);
-    this._queue.args.push(args);
+    this._queue.push({ functionName, args, newState });
   }
 
   // PRIVATE: Creates and stores an ORI instance by cloning current instance, and setting account to fraudulent user's data
@@ -645,9 +699,7 @@ class OptimisticRollIn {
 
   // PUBLIC: Clear the queued transitions
   clearQueue() {
-    this._queue.newStates.length = 0;
-    this._queue.functionNames.length = 0;
-    this._queue.args.length = 0;
+    this._queue.length = 0;
   }
 
   // PUBLIC: Delete internal fraudster object
@@ -874,20 +926,8 @@ class OptimisticRollIn {
   async sendQueue(options = {}) {
     // if in optimism, perform optimistically, else, perform and enter
     const result = this.isInOptimisticState
-      ? await this._performBatchOptimistically(
-          this._queue.functionNames,
-          this._queue.args,
-          this._queue.newStates,
-          options
-        )
-      : await this._performBatchOptimisticallyWhileEnteringOptimism(
-          this._queue.functionNames,
-          this._queue.args,
-          this._queue.newStates,
-          options
-        );
-
-    this.clearQueue();
+      ? await this._performBatchOptimistically(options)
+      : await this._performBatchOptimisticallyWhileEnteringOptimism(options);
 
     return result;
   }

@@ -257,17 +257,24 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
-      const callOptions = { gas: 500000 };
-      const { receipt } = await suspectOptimist.sendQueue(callOptions);
-      suspectLastTxId = receipt.transactionHash;
+      const callOptions = { gas: 200000 };
 
-      const accountState = await suspectOptimist.getAccountState();
+      let totalGasUsed = 0;
+
+      while (suspectOptimist.transitionsQueued) {
+        const { receipt } = await suspectOptimist.sendQueue(callOptions);
+        suspectLastTxId = receipt.transactionHash;
+
+        const accountState = await suspectOptimist.getAccountState();
+        expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
+
+        totalGasUsed += receipt.gasUsed;
+      }
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
-      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 323970) {
-        console.log(`Not Critical, but we expected gas used for [ 8] to be 323970, but got ${receipt.gasUsed}`);
+      if (totalGasUsed !== 363868) {
+        console.log(`Not Critical, but we expected gas used for [ 8] to be 363868, but got ${totalGasUsed}`);
       }
     });
 
@@ -307,8 +314,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 327157) {
-        console.log(`Not Critical, but we expected gas used for [ 10] to be 327157, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 327121) {
+        console.log(`Not Critical, but we expected gas used for [ 10] to be 327121, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -522,8 +529,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 328289) {
-        console.log(`Not Critical, but we expected gas used for [ 20] to be 328289, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 328409) {
+        console.log(`Not Critical, but we expected gas used for [ 20] to be 328409, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -557,8 +564,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 39683) {
-        console.log(`Not Critical, but we expected gas used for [ 22] to be 39683, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 39659) {
+        console.log(`Not Critical, but we expected gas used for [ 22] to be 39659, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -574,17 +581,24 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(calls);
 
-      const callOptions = { gas: 200000 };
-      const { receipt } = await suspectOptimist.sendQueue(callOptions);
-      suspectLastTxId = receipt.transactionHash;
+      const callOptions = { gas: 100000 };
 
-      const accountState = await suspectOptimist.getAccountState();
+      let totalGasUsed = 0;
+
+      while (suspectOptimist.transitionsQueued) {
+        const { receipt } = await suspectOptimist.sendQueue(callOptions);
+        suspectLastTxId = receipt.transactionHash;
+
+        const accountState = await suspectOptimist.getAccountState();
+        expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
+
+        totalGasUsed += receipt.gasUsed;
+      }
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
-      expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 166925) {
-        console.log(`Not Critical, but we expected gas used for [ 23] to be 166925, but got ${receipt.gasUsed}`);
+      if (totalGasUsed !== 248360) {
+        console.log(`Not Critical, but we expected gas used for [ 23] to be 248360, but got ${totalGasUsed}`);
       }
     });
 
