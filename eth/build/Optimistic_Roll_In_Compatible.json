@@ -59,7 +59,7 @@
       "type": "function"
     }
   ],
-  "metadata": "{\"compiler\":{\"version\":\"0.7.3+commit.9bfce1f6\"},\"language\":\"Solidity\",\"output\":{\"abi\":[{\"inputs\":[{\"internalType\":\"address\",\"name\":\"user\",\"type\":\"address\"}],\"name\":\"initialize_state\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"initial_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"call_data\",\"type\":\"bytes\"}],\"name\":\"optimistic_call\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"new_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"call_data\",\"type\":\"bytes\"}],\"name\":\"pessimistic_call\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"new_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"payable\",\"type\":\"function\"}],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol\":\"Optimistic_Roll_In_Compatible\"},\"evmVersion\":\"petersburg\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":999999},\"remappings\":[]},\"sources\":{\"/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol\":{\"keccak256\":\"0xa52cbbdb46293c2e4ec580da44dbf4f44a95deffd7eeda5b98a4804a986c1f52\",\"license\":\"MIT\",\"urls\":[\"bzz-raw://064c9204543aa06dd8091476ee29119932ec0edd0bd1c69aaaffd81709311874\",\"dweb:/ipfs/QmYmbqGTbsps7ZpsA7MrZDyXrNmZeETi5h6jzi2VfoLdHk\"]}},\"version\":1}",
+  "metadata": "{\"compiler\":{\"version\":\"0.7.3+commit.9bfce1f6\"},\"language\":\"Solidity\",\"output\":{\"abi\":[{\"inputs\":[{\"internalType\":\"address\",\"name\":\"user\",\"type\":\"address\"}],\"name\":\"initialize_state\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"initial_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"call_data\",\"type\":\"bytes\"}],\"name\":\"optimistic_call\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"new_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes\",\"name\":\"call_data\",\"type\":\"bytes\"}],\"name\":\"pessimistic_call\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"new_state\",\"type\":\"bytes32\"}],\"stateMutability\":\"payable\",\"type\":\"function\"}],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol\":\"Optimistic_Roll_In_Compatible\"},\"evmVersion\":\"istanbul\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":999999},\"remappings\":[]},\"sources\":{\"/Users/michaeldeluca/Projects/optimistic-roll-in/eth/contracts/optimistic-roll-in-compatible.sol\":{\"keccak256\":\"0xa52cbbdb46293c2e4ec580da44dbf4f44a95deffd7eeda5b98a4804a986c1f52\",\"license\":\"MIT\",\"urls\":[\"bzz-raw://064c9204543aa06dd8091476ee29119932ec0edd0bd1c69aaaffd81709311874\",\"dweb:/ipfs/QmYmbqGTbsps7ZpsA7MrZDyXrNmZeETi5h6jzi2VfoLdHk\"]}},\"version\":1}",
   "bytecode": "0x",
   "deployedBytecode": "0x",
   "immutableReferences": {},
@@ -664,8 +664,8 @@
     "version": "0.7.3+commit.9bfce1f6.Emscripten.clang"
   },
   "networks": {},
-  "schemaVersion": "3.3.1",
-  "updatedAt": "2020-11-09T17:52:02.259Z",
+  "schemaVersion": "3.3.2",
+  "updatedAt": "2020-12-08T00:32:21.110Z",
   "devdoc": {
     "kind": "dev",
     "methods": {},

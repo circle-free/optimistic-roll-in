@@ -3109,10 +3109,10 @@ merkle-patricia-tree@^2.1.2, merkle-patricia-tree@^2.3.2:
     rlp "^2.0.0"
     semaphore ">=1.0.1"
 
-merkle-trees@^0.2.2:
-  version "0.2.2"
-  resolved "https://registry.yarnpkg.com/merkle-trees/-/merkle-trees-0.2.2.tgz#8bf533fc3377f4eddf9eab47c32dc142eed75c53"
-  integrity sha512-VAMaAo/1thrQm0LSTzqJzqqtntpm3x8/MksSkO7SO7e92TvpmXUMlDWra2zMzH/WFsfgF7ak7yDiyE11lqUnRw==
+merkle-trees@^0.2.3:
+  version "0.2.3"
+  resolved "https://registry.yarnpkg.com/merkle-trees/-/merkle-trees-0.2.3.tgz#f90ff75ac19165b7eebbb5c50aa7b450a973693e"
+  integrity sha512-5jeee7IhCNuFVqLED4Hunp6sKaE1abe7vURkc+XHIAGrKGl2tDS5hISIis+Y1rfoLypgPE9g6qkMMHe3Zbtnxw==
   dependencies:
     sha3 "^2.1.3"
 
