@@ -325,7 +325,7 @@ class OptimisticRollIn {
     return this._performPessimisticallyWhileExitingOptimism(functionName, args, callOptions);
   }
 
-  // PRIVATE: prepare calldata necessary for batch optimistic calls, within gas constraints (only for self)
+  // PRIVATE: Prepare optimistic calldata necessary for batch optimistic calls, within gas constraints (only for self)
   async _prepareBatchCalldata(queue = [], options = {}) {
     const { from = this._sourceAddress, gas = 1000000, estimator } = options;
 
@@ -438,26 +438,28 @@ class OptimisticRollIn {
     return { newState, receipt };
   }
 
-  // PRIVATE: Optimistically perform a transition while already in optimistic state, and update internal state (only for self)
-  async _performOptimistically(functionName, args = [], newState, options = {}) {
-    const { from = this._sourceAddress, gas } = options;
+  // PRIVATE: Prepare optimistic calldata necessary for single optimistic call (only for self)
+  _prepareCalldata(functionName, args = [], options = {}) {
+    const { from = this._sourceAddress, gas = 100000 } = options;
 
     assert(compareHex(from, this._state.user), 'Can only perform on own account.');
 
-    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
+    const callDataHex = this._getCalldata(this._state.user, this._state.currentState, functionName, args);
+    const callData = toBuffer(callDataHex);
 
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), PROOF_OPTIONS);
+    const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(callData, PROOF_OPTIONS);
+    const callOptions = gas ? { from, gas } : { from };
 
-    const callOptions = { from };
+    return { callData, proof, newMerkleTree, callOptions };
+  }
 
-    if (gas) {
-      callOptions.gas = gas;
-    }
+  // PRIVATE: Optimistically perform a transition while already in optimistic state, and update internal state (only for self)
+  async _performOptimistically(functionName, args = [], newState, options = {}) {
+    const { callData, proof, newMerkleTree, callOptions } = this._prepareCalldata(functionName, args, options);
 
     const receipt = await this._oriContract.methods
       .perform_optimistically(
-        callDataHex,
+        toHex(callData),
         toHex(newState),
         toHex(proof.root),
         toHex(proof.compactProof),
@@ -475,23 +477,10 @@ class OptimisticRollIn {
 
   // PRIVATE: Optimistically perform a transition to enter optimistic state, and update internal state (only for self)
   async _performOptimisticallyWhileEnteringOptimism(functionName, args = [], newState, options = {}) {
-    const { from = this._sourceAddress, gas } = options;
-
-    assert(compareHex(from, this._state.user), 'Can only perform on own account.');
-
-    const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
-
-    // Get the expected new call data tree and append proof
-    const { proof, newMerkleTree } = this._state.callDataTree.appendSingle(toBuffer(callDataHex), PROOF_OPTIONS);
-
-    const callOptions = { from };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
+    const { callData, proof, newMerkleTree, callOptions } = this._prepareCalldata(functionName, args, options);
 
     const receipt = await this._oriContract.methods
-      .perform_optimistically_and_enter(callDataHex, toHex(newState), toHex(proof.compactProof))
+      .perform_optimistically_and_enter(toHex(callData), toHex(newState), toHex(proof.compactProof))
       .send(callOptions);
 
     const { returnValues } = receipt.events[EVENTS.ORI_New_Optimistic_State];
@@ -510,12 +499,7 @@ class OptimisticRollIn {
 
     const callDataHex = this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
-    const callOptions = { from };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
-
+    const callOptions = gas ? { from, gas } : { from };
     const receipt = await this._oriContract.methods.perform(callDataHex).send(callOptions);
 
     const { returnValues } = receipt.events[EVENTS.ORI_New_State];
@@ -534,11 +518,7 @@ class OptimisticRollIn {
 
     const callDataHex = await this._getCalldata(this._state.user, this._state.currentState, functionName, args);
 
-    const callOptions = { from };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
+    const callOptions = gas ? { from, gas } : { from };
 
     const receipt = await this._oriContract.methods
       .perform_and_exit(callDataHex, toHex(this._state.callDataTree.root), this._state.lastTime)
@@ -924,6 +904,8 @@ class OptimisticRollIn {
 
   // PUBLIC: Rolls the entire transition queue into a single transaction and broadcasts (only for self)
   async sendQueue(options = {}) {
+    assert(this._queue.length > 1, '');
+
     // if in optimism, perform optimistically, else, perform and enter
     const result = this.isInOptimisticState
       ? await this._performBatchOptimistically(options)
@@ -1007,9 +989,9 @@ class OptimisticRollIn {
     const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
 
     return [SIG_HASHES.PerformManyOptimisticallyAndEnter, SIG_HASHES.PerformManyOptimistically].includes(sighash)
-      ? await this._verifyBatchTransitions(suspectHex, decodedData, lastTime, options)
-      : [SIG_HASHES.PerformOptimisticallyAndEnter, SIG_HASHES.PerformOptimistically]
-      ? await this._verifyTransition(suspectHex, decodedData, lastTime, options)
+      ? this._verifyBatchTransitions(suspectHex, decodedData, lastTime, options)
+      : [SIG_HASHES.PerformOptimisticallyAndEnter, SIG_HASHES.PerformOptimistically].includes(sighash)
+      ? this._verifyTransition(suspectHex, decodedData, lastTime, options)
       : { valid: true };
   }
 }
