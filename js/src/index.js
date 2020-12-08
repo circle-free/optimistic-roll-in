@@ -72,7 +72,7 @@ class OptimisticRollIn {
       oriContract,
       logicContract,
       sourceAddress = accountAddress,
-      treeOptions = {},
+      treeOptions = { elementPrefix: '00' },
       optimismDecoder,
       logicDecoder,
       web3,
@@ -664,6 +664,22 @@ class OptimisticRollIn {
     });
 
     return { valid: false, user: suspectHex };
+  }
+
+  // PUBLIC: Export state (optimistic calldata elements, current state, and lastTime)
+  exportState() {
+    return {
+      callDataElements: toHex(this._state.callDataTree.elements),
+      currentState: toHex(this._state.currentState),
+      lastTime: this._state.lastTime,
+    };
+  }
+
+  // PUBLIC: Import state (optimistic calldata elements, current state, and lastTime)
+  importState({ callDataElements = [], currentState, lastTime }) {
+    this._state.callDataTree = new MerkleTree(toBuffer(callDataElements), this._treeOptions);
+    this._state.currentState = toBuffer(currentState);
+    this._state.lastTime = lastTime;
   }
 
   // PUBLIC: Bonds the user's account, using the source address (which may be the same as the user)

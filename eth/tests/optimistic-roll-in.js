@@ -132,10 +132,9 @@ contract('Optimistic Roll In', (accounts) => {
       const network = await web3.eth.net.getId();
       requiredBond = network === 5777 ? '1000000000000000000' : '10000000000000';
       lockTime = network === 5777 ? '600' : '60';
-      const oriOptions = { treeOptions: { elementPrefix: '00' }, web3, requiredBond, lockTime };
+      const oriOptions = { web3, requiredBond, lockTime };
 
       suspectOptimist = new OptimisticRollIn(suspect, contracts, oriOptions);
-
       accuserOptimist = new OptimisticRollIn(accuser, contracts, oriOptions);
     });
 
@@ -245,7 +244,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(user).to.equal(suspect.toLowerCase());
     });
 
-    it('[ 8] allows a user (suspect) to perform valid optimistic state transitions in batch.', async () => {
+    it('[ 8] allows a user (suspect) to perform valid optimistic state transitions in batches.', async () => {
       const calls = 100;
       const someArgs = generateElements(calls, { seed: '44' });
 
@@ -315,7 +314,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 327121) {
-        console.log(`Not Critical, but we expected gas used for [ 10] to be 327121, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [10] to be 327121, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -346,7 +345,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 38694) {
-        console.log(`Not Critical, but we expected gas used for [ 12] to be 38694, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [12] to be 38694, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -381,7 +380,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 98016) {
-        console.log(`Not Critical, but we expected gas used for [ 14] to be 98016, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [14] to be 98016, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -408,7 +407,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
 
       if (receipt.gasUsed !== 128150) {
-        console.log(`Not Critical, but we expected gas used for [ 15] to be 128150, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [15] to be 128150, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -455,7 +454,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLockedTime).to.equal(0);
 
       if (receipt.gasUsed !== 302397) {
-        console.log(`Not Critical, but we expected gas used for [ 17] to be 302397, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [17] to be 302397, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -481,7 +480,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(optimismBalance.toString()).to.equal('0');
 
       if (receipt.gasUsed !== 21077) {
-        console.log(`Not Critical, but we expected gas used for [ 18] to be 21077, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [18] to be 21077, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -504,7 +503,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 334711) {
-        console.log(`Not Critical, but we expected gas used for [ 19] to be 334711, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [19] to be 334711, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -530,7 +529,7 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 328409) {
-        console.log(`Not Critical, but we expected gas used for [ 20] to be 328409, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [20] to be 328409, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -541,7 +540,24 @@ contract('Optimistic Roll In', (accounts) => {
       expect(user).to.equal(suspect.toLowerCase());
     });
 
-    it('[22] allows a user (suspect) to perform a normal state transition (and exit optimism).', async () => {
+    it('[22] allows a user (suspect) export state and import into a newly created instance.', async () => {
+      const exportedState = suspectOptimist.exportState();
+
+      const contracts = {
+        oriAddress: optimismAddress,
+        oriABI: optimismContractInstance.abi,
+        logicAddress,
+        logicABI: logicContractInstance.abi,
+      };
+
+      const oriOptions = { web3, requiredBond, lockTime };
+
+      suspectOptimist = new OptimisticRollIn(suspect, contracts, oriOptions);
+
+      suspectOptimist.importState(exportedState);
+    });
+
+    it('[23] allows a user (suspect) to perform a normal state transition (and exit optimism).', async () => {
       const networkId = await web3.eth.net.getId();
 
       if (networkId === 5777) {
@@ -565,11 +581,11 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
       if (receipt.gasUsed !== 39659) {
-        console.log(`Not Critical, but we expected gas used for [ 22] to be 39659, but got ${receipt.gasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [23] to be 39659, but got ${receipt.gasUsed}`);
       }
     });
 
-    it('[23] allows a user (suspect) to perform valid optimistic state transitions in batch (and reenter optimism).', async () => {
+    it('[24] allows a user (suspect) to perform valid optimistic state transitions in batches (and reenter optimism).', async () => {
       const calls = 50;
       const someArgs = generateElements(calls, { seed: '99' });
 
@@ -598,11 +614,11 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
 
       if (totalGasUsed !== 248360) {
-        console.log(`Not Critical, but we expected gas used for [ 23] to be 248360, but got ${totalGasUsed}`);
+        console.log(`Not Critical, but we expected gas used for [24] to be 248360, but got ${totalGasUsed}`);
       }
     });
 
-    it('[24] allows a user (accuser) to immediately verify valid batched optimistic state transitions (using local js).', async () => {
+    it('[25] allows a user (accuser) to immediately verify valid batched optimistic state transitions (using local js).', async () => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.true;
