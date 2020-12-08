@@ -344,6 +344,7 @@ class OptimisticRollIn {
 
     const gasEstimator = (cdArray, ns) =>
       estimator(cdArray, ns, this._state.callDataTree.appendMulti(cdArray, PROOF_OPTIONS).proof);
+
     const index = await binarySearchGasCost(callDataArray, newStatesArray, gasEstimator, gas);
 
     const possibleCallDataArray = callDataArray.slice(0, index + 1);
@@ -375,7 +376,7 @@ class OptimisticRollIn {
           toHex(proof.compactProof),
           this._state.lastTime
         )
-        .estimateGas({ gas: 5000000 });
+        .estimateGas({ gas: 5000000, from: this._state.user });
 
     const {
       callDataArray,
@@ -412,7 +413,7 @@ class OptimisticRollIn {
     const estimator = (callDataArray, newState, proof) =>
       this._oriContract.methods
         .perform_many_optimistically_and_enter(toHex(callDataArray), toHex(newState), toHex(proof.compactProof))
-        .estimateGas({ gas: 5000000 });
+        .estimateGas({ gas: 5000000, from: this._state.user });
 
     const {
       callDataArray,
