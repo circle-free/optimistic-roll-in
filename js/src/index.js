@@ -279,9 +279,10 @@ class OptimisticRollIn {
   async _isValidTransition(suspectHex, callDataHex, newStateHex, options = {}) {
     const { pureVerifiers } = options;
 
-    // Decode sighash and use from calldata
+    // Decode sighash and user from calldata
     const decodedCallData = this._logicDecoder.decodeFn(callDataHex);
-    const { sighash, user } = decodedCallData;
+    const { sighash } = decodedCallData;
+    const user = decodedCallData[0];
 
     // If the user extracted from the calldata does not match, its invalid
     if (!compareHex(suspectHex, user)) return false;
@@ -589,7 +590,7 @@ class OptimisticRollIn {
     assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
 
     // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
-    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataArrayHex[0]);
+    const startingStateHex = this._logicDecoder.decodeFn(callDataArrayHex[0])[1];
     assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
 
     const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataArrayHex));
@@ -610,7 +611,7 @@ class OptimisticRollIn {
     assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
 
     // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
-    const { current_state: startingStateHex } = this._logicDecoder.decodeFn(callDataHex);
+    const startingStateHex = this._logicDecoder.decodeFn(callDataHex)[1];
     assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
 
     const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataHex));
@@ -625,9 +626,7 @@ class OptimisticRollIn {
     // Compute what the new states should have been, from the original state
     for (let i = 0; i < callDataArrayHex.length; i++) {
       const intermediateStateHex =
-        i === callDataArrayHex.length - 1
-          ? newStateHex
-          : this._logicDecoder.decodeFn(callDataArrayHex[i + 1]).current_state;
+        i === callDataArrayHex.length - 1 ? newStateHex : this._logicDecoder.decodeFn(callDataArrayHex[i + 1])[1];
 
       if (await this._isValidTransition(suspectHex, callDataArrayHex[i], intermediateStateHex, options)) continue;
 
