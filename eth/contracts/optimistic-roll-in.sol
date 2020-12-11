@@ -24,8 +24,8 @@ contract Optimistic_Roll_In {
   uint256 public immutable lock_time;
   uint256 public immutable required_bond;
 
-  mapping(address => uint256) public balances;
   mapping(address => bytes32) public account_states;
+  mapping(address => uint256) public balances;
   mapping(address => address) public lockers;
   mapping(address => uint256) public locked_timestamps;
   mapping(address => uint256) public rollback_sizes;
@@ -93,7 +93,7 @@ contract Optimistic_Roll_In {
   }
 
   // Bonds msg.value for user
-  function bond(address user) public payable {
+  function bond(address user) external payable {
     require(apply_bond(user) == 0, "INVALID_BOND");
   }
 
@@ -111,12 +111,63 @@ contract Optimistic_Roll_In {
     emit ORI_New_State(user, initial_state);
   }
 
-  // Allows unbonding of ETH if account not locked
-  function unbond(address payable destination) public not_locked(msg.sender) {
+  // Allows unbonding of ETH if account not locked (clears account state)
+  function unbond(address payable destination) external not_locked(msg.sender) {
     address user = msg.sender;
     uint256 amount = balances[user];
     balances[user] = 0;
+    account_states[user] = bytes32(0);
     destination.transfer(amount);
+  }
+
+  // Withdraws entire balance if no account state, or all minus bond if an account state exists
+  function withdraw(address payable destination) external not_locked(msg.sender) {
+    address user = msg.sender;
+    bool account_exists = account_states[user] != bytes32(0);
+    uint256 account_balance = balances[user];
+    uint256 amount = account_exists ? account_balance - required_bond : account_balance;
+
+    // Check for underflow
+    require(amount <= account_balance, "UNEXPECTED_UNDERFLOW");
+
+    balances[user] = account_balance - amount;
+    destination.transfer(amount);
+  }
+
+  // Allows unbonding of all user's ETH balance if account has or can have non-optimistic state
+  function archive(
+    address payable destination,
+    bytes32 call_data_root,
+    bytes32 state,
+    uint256 last_time
+  ) external not_locked(msg.sender) can_exit_optimism(last_time) {
+    address user = msg.sender;
+
+    // Check that the user it not in an optimistic state, which means that their account state is
+    // a call data tree, current state (S_n), and the last block
+    require(
+      keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[user],
+      "INVALID_ROOTS"
+    );
+
+    // Set the account state to an empty call data tree, current state (S_n), and last time 0
+    account_states[user] = keccak256(abi.encodePacked(bytes32(0), state, bytes32(0)));
+
+    // Make user their own locker, requiring them to unlock if they wish to unarchive
+    lockers[user] = user;
+
+    uint256 amount = balances[user];
+    balances[user] = 0;
+    destination.transfer(amount);
+  }
+
+  // Bonds msg.value for user of an archived account (that they have locked)
+  function unarchive() external payable is_locked(msg.sender) {
+    address user = msg.sender;
+
+    require(apply_bond(user) == 0, "INVALID_BOND");
+
+    lockers[user] = address(0);
   }
 
   // Returns true if calling the logic contract with the call data results in new state
@@ -150,7 +201,7 @@ contract Optimistic_Roll_In {
     bytes32 state = abi.decode(call_data[36:], (bytes32));
 
     // Check that the user it not in an optimistic state, which means that their account state is
-    // an empty call data tree, current state (S_n or S_0), and the last block is 0
+    // a call data tree, current state (S_n or S_0), and the last block is 0
     require(
       keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[caller],
       "INVALID_ROOTS"
@@ -192,7 +243,7 @@ contract Optimistic_Roll_In {
     bytes32 state = abi.decode(call_data[36:], (bytes32));
 
     // Check that the user it not in an optimistic state, which means that their account state is
-    // an empty call data tree, current state (S_0), and the last block is 0
+    // a call data tree, current state (S_0), and the last block
     require(
       keccak256(abi.encodePacked(call_data_root, state, bytes32(last_time))) == account_states[caller],
       "INVALID_ROOTS"
@@ -338,7 +389,7 @@ contract Optimistic_Roll_In {
     bytes32 call_data_root,
     bytes32[] calldata proof,
     uint256 last_time
-  ) external {
+  ) external is_locked(suspect) {
     address accuser = msg.sender;
 
     // Only the user that flagged/locked the suspect can prove fraud

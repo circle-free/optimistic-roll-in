@@ -8,7 +8,7 @@ const SomeLogicContractArtifact = artifacts.require('Some_Logic_Contract');
 const OptimisticRollIn = require('../../js/src');
 const { to32ByteBuffer, hashPacked, toHex, toBuffer } = require('../../js/src/utils');
 
-// TODO: test DOS lock and unlock
+// TODO: test DOS lock and unlock (self locking and let lock expire)
 
 const somePureTransition = (_user, _currentState, _arg) => {
   const user = toBuffer(_user);
@@ -106,15 +106,18 @@ contract('Optimistic Roll In', (accounts) => {
     let optimismAddress = null;
     let fraudulentTransitionIndex = null;
 
-    let suspect = accounts[0];
+    let suspect = accounts[0].toLowerCase();
     let suspectOptimist = null;
     let suspectBondAmount = '0';
     let suspectLastTxId = null;
     let suspectDepositAmount = '0';
 
-    let accuser = accounts[1];
+    let accuser = accounts[1].toLowerCase();
     let accuserOptimist = null;
     let accuserBondAmount = '0';
+
+    let watcher = accounts[2].toLowerCase();
+    let watcherOptimist = null;
 
     before(async () => {
       logicContractInstance = await SomeLogicContractArtifact.deployed();
@@ -136,6 +139,21 @@ contract('Optimistic Roll In', (accounts) => {
 
       suspectOptimist = new OptimisticRollIn(suspect, contracts, oriOptions);
       accuserOptimist = new OptimisticRollIn(accuser, contracts, oriOptions);
+      watcherOptimist = new OptimisticRollIn(watcher, contracts, oriOptions);
+
+      const fraudEmitter = watcherOptimist.autoVerify({ pureVerifiers });
+
+      fraudEmitter.on('fraud', ({ user }) => {
+        console.log(`Watcher detected that ${user} committed fraud.`);
+      });
+
+      fraudEmitter.on('update', ({ user }) => {
+        console.log(`Watcher updated fraudster ${user} with new transaction.`);
+      });
+
+      fraudEmitter.on('proven', ({ user }) => {
+        console.log(`Watcher noticed that ${user} was proven fraudulent.`);
+      });
     });
 
     it('[ 1] can bond a user (who will eventually be the guilty suspect).', async () => {
@@ -151,8 +169,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
       expect(await suspectOptimist.isBonded()).to.be.true;
 
-      if (receipt.gasUsed !== 42844) {
-        console.log(`Not Critical, but we expected gas used for [ 1] to be 42844, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 42816) {
+        console.log(`Not Critical, but we expected gas used for [ 1] to be 42816, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -189,8 +207,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 38054) {
-        console.log(`Not Critical, but we expected gas used for [ 3] to be 38054, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 38029) {
+        console.log(`Not Critical, but we expected gas used for [ 3] to be 38029, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -207,8 +225,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 34351) {
-        console.log(`Not Critical, but we expected gas used for [ 4] to be 34351, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 34393) {
+        console.log(`Not Critical, but we expected gas used for [ 4] to be 34393, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -216,7 +234,7 @@ contract('Optimistic Roll In', (accounts) => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId);
 
       expect(valid).to.be.true;
-      expect(user).to.equal(suspect.toLowerCase());
+      expect(user).to.equal(suspect);
     });
 
     it('[ 6] allows a user (suspect) to perform a valid optimistic state transition.', async () => {
@@ -232,8 +250,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 36237) {
-        console.log(`Not Critical, but we expected gas used for [ 6] to be 36237, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 36234) {
+        console.log(`Not Critical, but we expected gas used for [ 6] to be 36234, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -241,7 +259,7 @@ contract('Optimistic Roll In', (accounts) => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.true;
-      expect(user).to.equal(suspect.toLowerCase());
+      expect(user).to.equal(suspect);
     });
 
     it('[ 8] allows a user (suspect) to perform valid optimistic state transitions in batches.', async () => {
@@ -272,8 +290,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
 
-      if (totalGasUsed !== 363868) {
-        console.log(`Not Critical, but we expected gas used for [ 8] to be 363868, but got ${totalGasUsed}`);
+      if (totalGasUsed !== 363746) {
+        console.log(`Not Critical, but we expected gas used for [ 8] to be 363746, but got ${totalGasUsed}`);
       }
     });
 
@@ -281,7 +299,7 @@ contract('Optimistic Roll In', (accounts) => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.true;
-      expect(user).to.equal(suspect.toLowerCase());
+      expect(user).to.equal(suspect);
     });
 
     it('[10] allows a user (suspect) to perform fraudulent optimistic state transitions in batch.', async () => {
@@ -313,8 +331,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 327121) {
-        console.log(`Not Critical, but we expected gas used for [10] to be 327121, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 327120) {
+        console.log(`Not Critical, but we expected gas used for [10] to be 327120, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -322,7 +340,7 @@ contract('Optimistic Roll In', (accounts) => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.false;
-      expect(user).to.equal(suspect.toLowerCase());
+      expect(user).to.equal(suspect);
 
       const fraudster = accuserOptimist.getFraudster(suspect);
       const accountState = await suspectOptimist.getAccountState();
@@ -344,8 +362,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 38694) {
-        console.log(`Not Critical, but we expected gas used for [12] to be 38694, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 38691) {
+        console.log(`Not Critical, but we expected gas used for [12] to be 38691, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -379,8 +397,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 98016) {
-        console.log(`Not Critical, but we expected gas used for [14] to be 98016, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 97991) {
+        console.log(`Not Critical, but we expected gas used for [14] to be 97991, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -406,8 +424,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(accuser);
       expect(accuserLockedTime.toString()).to.equal(block.timestamp.toString());
 
-      if (receipt.gasUsed !== 128150) {
-        console.log(`Not Critical, but we expected gas used for [15] to be 128150, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 128144) {
+        console.log(`Not Critical, but we expected gas used for [15] to be 128144, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -453,8 +471,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(accuserLocker).to.equal(null);
       expect(accuserLockedTime).to.equal(0);
 
-      if (receipt.gasUsed !== 302397) {
-        console.log(`Not Critical, but we expected gas used for [17] to be 302397, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 303293) {
+        console.log(`Not Critical, but we expected gas used for [17] to be 303293, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -472,15 +490,15 @@ contract('Optimistic Roll In', (accounts) => {
       const optimismBalance = await web3.eth.getBalance(optimismAddress);
 
       // I guess negative here for public since bond/reward is cheaper than proof cost
-      const expectedBalance = (await web3.eth.net.getId()) === 5777 ? '1999957846000000000' : '-1078000000000';
+      const expectedBalance = (await web3.eth.net.getId()) === 5777 ? '1999956158000000000' : '-1078000000000';
 
       expect((endingEth - startingEth).toString()).to.equal(expectedBalance);
       expect(accuserBalance.toString()).to.equal('0');
       expect(suspectBalance.toString()).to.equal('0');
       expect(optimismBalance.toString()).to.equal('0');
 
-      if (receipt.gasUsed !== 21077) {
-        console.log(`Not Critical, but we expected gas used for [18] to be 21077, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 21921) {
+        console.log(`Not Critical, but we expected gas used for [18] to be 21921, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -502,8 +520,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(optimismBalance.toString()).to.equal(suspectBondAmount);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 334711) {
-        console.log(`Not Critical, but we expected gas used for [19] to be 334711, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 334759) {
+        console.log(`Not Critical, but we expected gas used for [19] to be 334759, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -528,8 +546,8 @@ contract('Optimistic Roll In', (accounts) => {
       expect(suspectOptimist.transitionsQueued).to.equal(0);
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 328409) {
-        console.log(`Not Critical, but we expected gas used for [20] to be 328409, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 328360) {
+        console.log(`Not Critical, but we expected gas used for [20] to be 328360, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -537,7 +555,7 @@ contract('Optimistic Roll In', (accounts) => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.true;
-      expect(user).to.equal(suspect.toLowerCase());
+      expect(user).to.equal(suspect);
     });
 
     it('[22] allows a user (suspect) export state and import into a newly created instance.', async () => {
@@ -580,8 +598,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(accountState.equals(suspectOptimist.accountState)).to.be.true;
 
-      if (receipt.gasUsed !== 39659) {
-        console.log(`Not Critical, but we expected gas used for [23] to be 39659, but got ${receipt.gasUsed}`);
+      if (receipt.gasUsed !== 39724) {
+        console.log(`Not Critical, but we expected gas used for [23] to be 39724, but got ${receipt.gasUsed}`);
       }
     });
 
@@ -613,8 +631,8 @@ contract('Optimistic Roll In', (accounts) => {
 
       expect(suspectOptimist.transitionsQueued).to.equal(0);
 
-      if (totalGasUsed !== 248360) {
-        console.log(`Not Critical, but we expected gas used for [24] to be 248360, but got ${totalGasUsed}`);
+      if (totalGasUsed !== 248283) {
+        console.log(`Not Critical, but we expected gas used for [24] to be 248283, but got ${totalGasUsed}`);
       }
     });
 
@@ -622,7 +640,7 @@ contract('Optimistic Roll In', (accounts) => {
       const { valid, user } = await accuserOptimist.verifyTransaction(suspectLastTxId, { pureVerifiers });
 
       expect(valid).to.be.true;
-      expect(user).to.equal(suspect.toLowerCase());
+      expect(user).to.equal(suspect);
     });
   });
 });
