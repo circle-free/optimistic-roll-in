@@ -1,6 +1,12 @@
+// TODO: smart local gas estimates as default
+// TODO: check if account locked for all performs (maybe not, might be slow)
+// TODO: implement unbond properly
+// TODO: implement withdraw, archive, and unarchive
+
 const assert = require('assert');
 const { MerkleTree, PartialMerkleTree } = require('merkle-trees/js');
 const txDecoder = require('ethereum-tx-decoder');
+const EventEmitter = require('events');
 
 const { to32ByteBuffer, hashPacked, prefix, toHex, toBuffer, compareHex } = require('./utils');
 
@@ -36,14 +42,12 @@ const TOPICS = {
   ORI_Unlocked: '0x524512344e535e9bda79e916c2ea8c7b9e5d23d83e1b95181d7622b4ac3d4293',
 };
 
-// TODO: smart local gas estimates as default
-// TODO: check if account locked for all performs (maybe not, might be slow)
-
+// HELPER: Will find the index in the callDataArray that results in transaction just under the maxGas
 const binarySearchGasCost = async (
   callDataArray,
   newStatesArray,
   gasEstimator,
-  searchValue,
+  maxGas,
   left = 0,
   right = callDataArray.length
 ) => {
@@ -51,10 +55,11 @@ const binarySearchGasCost = async (
 
   while (left < right) {
     const mid = (left + right) >> 1;
+
     const valueAtMid =
       cache[mid] ?? (cache[mid] = await gasEstimator(callDataArray.slice(0, mid + 1), newStatesArray[mid]));
 
-    if (searchValue < valueAtMid) {
+    if (maxGas < valueAtMid) {
       right = mid;
     } else {
       left = mid + 1;
@@ -71,7 +76,7 @@ class OptimisticRollIn {
     const {
       oriContract,
       logicContract,
-      sourceAddress = accountAddress,
+      sourceAddress = accountAddress.toLowerCase(),
       treeOptions = { elementPrefix: '00' },
       optimismDecoder,
       logicDecoder,
@@ -141,7 +146,7 @@ class OptimisticRollIn {
     this._sourceAddress = sourceAddress;
 
     this._state = {
-      user: accountAddress,
+      user: accountAddress.toLowerCase(),
       callDataTree: null,
       currentState: null,
       lastTime: null,
@@ -151,6 +156,8 @@ class OptimisticRollIn {
     this._queue = [];
 
     this._frauds = {};
+
+    this.verifyEmitter = null;
   }
 
   // STATIC: Creates a new OptimisticRollIn instance, with defined parameters and options
@@ -194,7 +201,7 @@ class OptimisticRollIn {
     const callDataPartialTree = PartialMerkleTree.fromAppendProof(appendProof, treeOptions);
 
     fraudster._state = {
-      user: suspect,
+      user: suspect.toLowerCase(),
       callDataTree: callDataPartialTree,
       currentState: toBuffer(newStateHex),
       lastTime: lastTime,
@@ -559,7 +566,7 @@ class OptimisticRollIn {
       lockTime: this._lockTime,
     };
 
-    this._frauds[suspect] = OptimisticRollIn.fraudsterFromProof(parameters, options);
+    this._frauds[suspect.toLowerCase()] = OptimisticRollIn.fraudsterFromProof(parameters, options);
   }
 
   // PRIVATE: Updates the state with new call data tree, new state, and last optimistic time
@@ -589,12 +596,17 @@ class OptimisticRollIn {
     assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
     assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
 
+    // TODO: check user matches
+    const user = this._logicDecoder.decodeFn(callDataArrayHex[0])[0].toLowerCase();
+
     // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
     const startingStateHex = this._logicDecoder.decodeFn(callDataArrayHex[0])[1];
     assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
 
     const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataArrayHex));
     this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
+
+    return { user };
   }
 
   // PRIVATE: Updates internal account given some new optimistic transition
@@ -610,12 +622,17 @@ class OptimisticRollIn {
     assert(originalLastTimeBN.toNumber() === this._state.lastTime, 'Last time mismatch.');
     assert(toBuffer(callDataRootHex).equals(this._state.callDataTree.root), 'Root mismatch.');
 
+    // TODO: check user matches
+    const user = this._logicDecoder.decodeFn(callDataHex)[0].toLowerCase();
+
     // Check that this last transition was valid, by decoding arg from calldata and compute expected new state
     const startingStateHex = this._logicDecoder.decodeFn(callDataHex)[1];
     assert(toBuffer(startingStateHex).equals(this._state.currentState), 'State mismatch.');
 
     const newMerkleTree = this._state.callDataTree.append(toBuffer(callDataHex));
     this._updateStateOptimistically(newMerkleTree, toBuffer(newStateHex), lastTime);
+
+    return { user };
   }
 
   // PRIVATE: Verifies batch optimistic transitions, and creates a fraudster ORI if fraud is found
@@ -700,7 +717,7 @@ class OptimisticRollIn {
 
   // PUBLIC: Delete internal fraudster object
   deleteFraudster(user) {
-    this._frauds[user] = null;
+    this._frauds[user.toLowerCase()] = null;
   }
 
   // PUBLIC: Returns the account user's balance (on chain)
@@ -736,7 +753,7 @@ class OptimisticRollIn {
   async getLocker(user = this._state.user) {
     const locker = await this._oriContract.methods.lockers(user).call();
 
-    return compareHex(locker, ZERO_ADDRESS) ? null : locker;
+    return compareHex(locker, ZERO_ADDRESS) ? null : locker.toLowerCase();
   }
 
   // PUBLIC: Returns lock time for the account (on chain)
@@ -775,15 +792,11 @@ class OptimisticRollIn {
     const additionalBond = amountRequired > 0n ? amountRequired : 0n;
     const value = (BigInt(deposit) + additionalBond).toString();
 
-    const callOptions = { from, value };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
-
+    const callOptions = gas ? { from, value, gas } : { from, value };
     const receipt = await this._oriContract.methods.initialize().send(callOptions);
 
-    assert(receipt.events[EVENTS.ORI_New_State].returnValues.user === this._state.user, 'Unexpected user.');
+    const { user } = receipt.events[EVENTS.ORI_New_State].returnValues;
+    assert(compareHex(user, this._state.user), 'Unexpected user.');
 
     const newState = receipt.events[EVENTS.ORI_New_State].returnValues.new_state;
     this._updateStatePessimistically(toBuffer(newState));
@@ -826,11 +839,7 @@ class OptimisticRollIn {
     const indices = [this._state.fraudIndex, this._state.fraudIndex + 1];
     const { root, elements, compactProof } = this._state.callDataTree.generateMultiProof(indices, PROOF_OPTIONS);
 
-    const callOptions = { from };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
+    const callOptions = gas ? { from, gas } : { from };
 
     // Prove the fraud
     const receipt = await this._oriContract.methods
@@ -885,11 +894,7 @@ class OptimisticRollIn {
     // User needs to prove to the current size of the on-chain call data tree
     const { root, elementCount, elementRoot: sizeProof } = this._state.callDataTree.generateSizeProof(PROOF_OPTIONS);
 
-    const callOptions = { from, value };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
+    const callOptions = gas ? { from, value, gas } : { from, value };
 
     // User performs the rollback while bonding new coin at the same time
     const receipt = await this._oriContract.methods
@@ -933,13 +938,7 @@ class OptimisticRollIn {
   // PUBLIC: Unbonds the user's account to some destination
   async unbond(destination, options = {}) {
     const { from = this._sourceAddress, gas } = options;
-
-    const callOptions = { from };
-
-    if (gas) {
-      callOptions.gas = gas;
-    }
-
+    const callOptions = gas ? { from, gas } : { from };
     const receipt = await this._oriContract.methods.unbond(destination).send(callOptions);
 
     return { receipt };
@@ -1001,7 +1000,7 @@ class OptimisticRollIn {
       [TOPICS.ORI_New_Optimistic_State, TOPICS.ORI_New_Optimistic_States].includes(topics[0])
     );
 
-    const suspectHex = prefix(oriLog.topics[1].slice(26));
+    const suspectHex = prefix(oriLog.topics[1].slice(26)).toLowerCase();
     const lastTime = parseInt(oriLog.topics[2].slice(2), 16);
 
     return [SIG_HASHES.PerformManyOptimisticallyAndEnter, SIG_HASHES.PerformManyOptimistically].includes(sighash)
@@ -1009,6 +1008,58 @@ class OptimisticRollIn {
       : [SIG_HASHES.PerformOptimisticallyAndEnter, SIG_HASHES.PerformOptimistically].includes(sighash)
       ? this._verifyTransition(suspectHex, decodedData, lastTime, options)
       : { valid: true };
+  }
+
+  autoVerify(options) {
+    // TODO: eth only for now (ethers v5 event docs unclear)
+    // TODO: likely susceptible to race conditions (should update but fraud detection not done yet)
+    // TODO: needs a mechanism/event to indicate if fraudster is locked and updates are done
+    // TODO: mechanism to return error if no websockets or fail to subscribe (perhaps async return)
+    // TODO: perhaps an unsubscribe mechanism, if supported by web3/ethers
+
+    const { pureVerifiers, fromBlock = 'latest' } = options;
+
+    if (this.verifyEmitter) return this.verifyEmitter;
+
+    this.verifyEmitter = new EventEmitter();
+
+    const handleOptimisticTransaction = (event) => {
+      const { transactionHash, returnValues } = event;
+      const fraudster = this.getFraudster(returnValues.user);
+
+      if (fraudster) {
+        fraudster.update(transactionHash).then(({ user }) => {
+          this.verifyEmitter.emit('update', { user });
+        });
+
+        return;
+      }
+
+      this.verifyTransaction(transactionHash, { pureVerifiers }).then(({ valid, user }) => {
+        if (valid) return;
+
+        this.verifyEmitter.emit('fraud', { user });
+      });
+    };
+
+    const handleProvenFraud = (event) => {
+      const { returnValues } = event;
+      const { suspect } = returnValues;
+      this.deleteFraudster(suspect);
+
+      this.verifyEmitter.emit('proven', { user: suspect.toLowerCase() });
+    };
+
+    const newStateEmitter = this._oriContract.events.ORI_New_Optimistic_State({ fromBlock });
+    newStateEmitter.on('data', handleOptimisticTransaction);
+
+    const newStatesEmitter = this._oriContract.events.ORI_New_Optimistic_States({ fromBlock });
+    newStatesEmitter.on('data', handleOptimisticTransaction);
+
+    const fraudProvenEmitter = this._oriContract.events.ORI_Fraud_Proven({ fromBlock });
+    fraudProvenEmitter.on('data', handleProvenFraud);
+
+    return this.verifyEmitter;
   }
 }
 
