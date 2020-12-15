@@ -689,14 +689,16 @@ class OptimisticRollIn {
       callDataElements: toHex(this._state.callDataTree.elements),
       currentState: toHex(this._state.currentState),
       lastTime: this._state.lastTime,
+      localQueue: this._queue,
     };
   }
 
   // PUBLIC: Import state (optimistic calldata elements, current state, and lastTime)
-  importState({ callDataElements = [], currentState, lastTime }) {
+  importState({ callDataElements = [], currentState, lastTime, localQueue = [] }) {
     this._state.callDataTree = new MerkleTree(toBuffer(callDataElements), this._treeOptions);
     this._state.currentState = toBuffer(currentState);
     this._state.lastTime = lastTime;
+    this._queue = localQueue.slice();
   }
 
   // PUBLIC: Bonds the user's account, using the source address (which may be the same as the user)
