@@ -1,9 +1,15 @@
 # optimistic-roll-in
 
+### 4-Minute Pitch
+
+[![Optimistic Roll-Ins in 4 Minutes](http://img.youtube.com/vi/gEwcKkz417M/0.jpg)](http://www.youtube.com/watch?v=gEwcKkz417M "Optimistic Roll-Ins in 4 Minutes")
+
+
 ### Status
 
 Just a Proof Of Concept, with Smart Contracts and JS Client. Only "happy path" tested. No security review. Feedback welcome and wanted.
 <br>
+
 
 ### Brief
 
